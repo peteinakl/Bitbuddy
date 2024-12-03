@@ -95,15 +95,15 @@ class BitcoinTradingBot:
         # Trading parameters
         self.position_stack = []
         self.max_positions = 3
-        self.min_position_size = 0.35   # Increased from 0.25 for larger positions
-        self.max_position_size = 0.50   # Increased from 0.40 for bigger opportunities
-        self.position_step = 0.05       # For scaling into positions
-        self.scalp_threshold = 0.0015    # 0.15% movement threshold
-        self.profit_target = 0.005      # 0.5% profit target
+        self.min_position_size = 0.40    # Increased from 0.35
+        self.max_position_size = 0.80    # Increased from 0.50
+        self.position_step = 0.10        # Larger steps
+        self.scalp_threshold = 0.001     # 0.1% movement threshold
+        self.profit_target = 0.004       # 0.4% profit target
         self.stop_loss = -0.003         # 0.3% stop loss
+        self.trailing_stop = 0.002      # 0.2% trailing stop
         
         # Add trailing stop loss
-        self.trailing_stop = 0.002      # 0.2% trailing stop
         self.trailing_active = False
         self.trailing_price = None
         
@@ -170,19 +170,19 @@ class BitcoinTradingBot:
         self.load_learning_data()
         
         # Position sizing parameters
-        self.min_position_size = 0.30    # Start smaller
-        self.max_position_size = 0.70    # Never go all-in
-        self.position_step = 0.05        # Smaller steps
+        self.min_position_size = 0.40    # Start smaller
+        self.max_position_size = 0.80    # Never go all-in
+        self.position_step = 0.10        # Smaller steps
         
         # Market condition thresholds
         self.condition_multipliers = {
-            'STRONG_BULLISH': 2.0,    # Aggressive in strong trends
-            'BULLISH': 1.5,
-            'VOLATILE_RANGE': 0.8,    # More cautious in volatile markets
-            'RANGING': 0.6,
-            'BEARISH': 0.4,          # Still trade in bear markets but smaller
-            'STRONG_BEARISH': 0.3,
-            'NEUTRAL': 0.5
+            'STRONG_BULLISH': 2.0,    # Double size in strong bulls
+            'BULLISH': 1.5,           # 50% more in bulls
+            'VOLATILE_RANGE': 1.0,    # Full size in volatility
+            'RANGING': 0.8,           # 80% size in range
+            'BEARISH': 0.5,           # Half size in bears
+            'STRONG_BEARISH': 0.3,    # Reduced size in strong bears
+            'NEUTRAL': 0.8            # 80% in neutral
         }
         
         # Momentum thresholds
@@ -587,23 +587,29 @@ RISK METRICS
             f.write(status)
 
     def calculate_optimal_position_size(self, current_price: float, trend_strength: float) -> float:
-        """Calculate position size with volatility adjustment"""
+        """Calculate position size with portfolio consideration"""
         portfolio_value = self.capital + (self.btc_holdings * current_price)
+        
+        # Calculate available capital
+        available_capital = self.capital  # Should consider partial positions
         
         # Calculate volatility adjustment
         volatility = self.calculate_volatility()
         volatility_factor = max(0.3, min(1.0, self.max_volatility / volatility if volatility > 0 else 1.0))
         
-        # Base position size
-        base_size = portfolio_value * self.min_position_size * volatility_factor
+        # Base position size considering available capital
+        base_size = min(available_capital, portfolio_value * self.min_position_size * volatility_factor)
         
         # Adjust for trend strength
         trend_multiplier = min(2.0, max(0.5, 1.0 + trend_strength * 50))
         position_size = base_size * trend_multiplier
         
         # Ensure within limits
-        max_position = portfolio_value * self.max_position_size * volatility_factor
-        min_position = max(self.min_trade_size, portfolio_value * 0.1)  # At least 10% or min trade size
+        max_position = min(
+            portfolio_value * self.max_position_size * volatility_factor,
+            available_capital
+        )
+        min_position = max(self.min_trade_size, portfolio_value * 0.1)
         
         return min(max_position, max(min_position, position_size))
 
@@ -655,80 +661,99 @@ RISK METRICS
         return 0.5
 
     def execute_trade_decision(self):
-        """Execute trading strategy with fractional positions"""
+        """Execute trading strategy with alternative analysis"""
         current_price = self.fetch_bitcoin_price()
         if current_price is None:
             return
         
+        # Make actual trading decision
+        decision = self._get_trade_decision(current_price)
+        
+        # Need to add position management here
+        for position in self.position_stack:
+            if position.get('active', True):
+                action = self.manage_position(position, current_price, self.analyze_market_condition())
+                if action != 'HOLD':
+                    self._execute_exit_trade(position, current_price, action, 
+                        (current_price - position['entry_price']) / position['entry_price'],
+                        position['amount'])
+        
+        # Log decision analysis
+        logging.info(f"""
+Trade Decision:
+  Action: {decision['action']}
+  Amount: {decision.get('amount', 0):.8f} BTC
+  Reason: {decision.get('reason', 'N/A')}
+  Market Condition: {self.analyze_market_condition()}
+  Current Price: ${current_price:,.2f}
+""")
+        
+        # Execute actual trade
+        if decision['action'] == 'BUY':
+            self.execute_trade('BUY', decision['amount'], current_price)
+            # Add to position stack
+            self.position_stack.append({
+                'amount': decision['amount'],
+                'entry_price': current_price,
+                'timestamp': datetime.now(),
+                'active': True,
+                'reason': decision['reason']
+            })
+        elif decision['action'] == 'SELL':
+            self.execute_trade('SELL', decision['amount'], current_price)
+        
+        # Simulate alternatives for learning
+        alternatives = self.simulate_alternative_strategy(current_price, decision['action'])
+        self.learn_from_alternatives()
+
+    def _get_trade_decision(self, current_price: float) -> Dict:
+        """Get trading decision based on current market conditions"""
         market_condition = self.analyze_market_condition()
         momentum = self.analyze_market_momentum()
         
-        analysis = f"\n{'='*50}\nTRADE DECISION ANALYSIS\n{'='*50}\n"
-        analysis += f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
-        analysis += f"Current Price: ${current_price:,.2f}\n"
-        analysis += f"Market Condition: {market_condition}\n"
+        # Calculate position size
+        position_size = self.calculate_optimal_position_size(current_price, momentum['strength'])
+        entry_fraction = self.calculate_position_fraction(market_condition, momentum, current_price)
         
-        # Position Management for existing positions
-        active_positions = [p for p in self.position_stack if p.get('active', True)]
+        # More aggressive entry conditions
+        if market_condition in ['STRONG_BULLISH', 'BULLISH', 'VOLATILE_RANGE'] and len(self.position_stack) < self.max_positions:
+            # Buy on any upward momentum
+            if momentum['direction'] == 'up':
+                amount = (position_size * entry_fraction) / current_price
+                if amount * current_price >= 10:  # Minimum $10 trade
+                    return {
+                        'action': 'BUY',
+                        'amount': amount,
+                        'reason': f"{market_condition}_MOMENTUM"
+                    }
         
-        for position in active_positions:
-            entry_price = position['entry_price']
-            current_pnl = (current_price - entry_price) / entry_price
-            
-            analysis += f"\nPosition Analysis:\n"
-            analysis += f"Current Holdings: {position['amount']:.8f} BTC\n"
-            analysis += f"Entry Price: ${entry_price:,.2f}\n"
-            analysis += f"Current P/L: {current_pnl:.2%}\n"
-            
-            # Calculate exit fraction based on signals
-            exit_fraction = self.calculate_position_fraction(market_condition, momentum, current_price)
-            
-            # Scaled exit conditions
-            if current_pnl >= self.profit_target:
-                exit_amount = position['amount'] * exit_fraction
-                analysis += f"ACTION: Taking profit on {exit_fraction:.1%} of position\n"
-                self._execute_exit_trade(position, current_price, 'PROFIT_TARGET', current_pnl, exit_amount)
-                
-            elif current_pnl <= self.stop_loss:
-                # Full exit on stop loss
-                analysis += "ACTION: Stop loss triggered - full exit\n"
-                self._execute_exit_trade(position, current_price, 'STOP_LOSS', current_pnl, position['amount'])
+        # More aggressive profit taking
+        elif market_condition in ['STRONG_BEARISH', 'BEARISH'] and self.btc_holdings > 0:
+            if momentum['direction'] == 'down':
+                amount = self.btc_holdings * entry_fraction
+                return {
+                    'action': 'SELL',
+                    'amount': amount,
+                    'reason': f"{market_condition}_MOMENTUM"
+                }
         
-        # Entry decisions
-        if len(active_positions) < self.max_positions:
-            # Calculate entry fraction
-            entry_fraction = self.calculate_position_fraction(market_condition, momentum, current_price)
-            max_position_size = self.calculate_optimal_position_size(current_price, momentum['strength'])
-            entry_size = max_position_size * entry_fraction
-            
-            analysis += f"\nEntry Analysis:\n"
-            analysis += f"Position Size Fraction: {entry_fraction:.1%}\n"
-            analysis += f"Proposed Entry Size: ${entry_size:,.2f}\n"
-            
-            if entry_size >= 10 and market_condition in ['STRONG_BULLISH', 'BULLISH']:
-                btc_amount = entry_size / current_price
-                analysis += f"ACTION: Opening position with {entry_fraction:.1%} of max size\n"
-                self.execute_trade("BUY", btc_amount, current_price)
-                self.position_stack.append({
-                    'amount': btc_amount,
-                    'entry_price': current_price,
-                    'timestamp': datetime.now(),
-                    'active': True
-                })
-        
-        # Log the analysis
-        logging.info(analysis)
-        with open('trade_decisions.log', 'a') as f:
-            f.write(analysis)
+        return {
+            'action': 'HOLD',
+            'amount': 0,
+            'reason': 'NO_SIGNAL'
+        }
 
     def _execute_exit_trade(self, position, current_price, reason, profit_pct, exit_amount):
-        """Execute partial or full position exits"""
+        """Execute partial or full position exits with proper tracking"""
         self.execute_trade("SELL", exit_amount, current_price)
         
         # Update position
         position['amount'] -= exit_amount
         if position['amount'] <= 0.00001:  # If essentially zero
             position['active'] = False
+            position['exit_price'] = current_price
+            position['exit_time'] = datetime.now()
+            position['final_pnl'] = profit_pct
         
         trade_result = {
             'action': 'SELL',
@@ -736,7 +761,8 @@ RISK METRICS
             'amount': exit_amount,
             'price': current_price,
             'profit_pct': profit_pct,
-            'timestamp': datetime.now().isoformat()
+            'timestamp': datetime.now().isoformat(),
+            'position_id': position.get('id', 'unknown')
         }
         
         self.trade_history.append(trade_result)
@@ -850,35 +876,37 @@ RISK METRICS
         return True
 
     def manage_position(self, position: Dict, current_price: float, market_condition: str):
-        """Enhanced position management for crypto volatility"""
+        """Enhanced position management for better gains"""
         entry_price = position['entry_price']
         current_pnl = (current_price - entry_price) / entry_price
         
-        # Calculate current volatility
+        # Calculate volatility for adjustments
         volatility = self.calculate_volatility()
         volatility_adjustment = min(1.0, self.max_volatility / volatility if volatility > 0 else 1.0)
         
-        # Adjust thresholds based on volatility
+        # Dynamic thresholds
         adjusted_profit_target = self.profit_target * (1 + volatility_adjustment)
         adjusted_stop_loss = self.stop_loss * (1 + volatility_adjustment)
         
-        # Dynamic trailing stop
+        # Trailing stop management
         if current_pnl > adjusted_profit_target * 0.5:
             if not self.trailing_active:
                 self.trailing_active = True
                 self.trailing_price = current_price
             elif current_price > self.trailing_price:
                 self.trailing_price = current_price
+                # Tighten stop as profits increase
+                self.trailing_stop = max(0.001, self.trailing_stop * (1 - current_pnl))
             elif current_price < self.trailing_price * (1 - self.trailing_stop):
                 return 'TRAILING_STOP'
         
-        # Quick profit taking in volatile markets
+        # Take profits in volatile conditions
         if current_pnl >= adjusted_profit_target:
             if volatility > self.max_volatility * 0.5:
                 return 'TAKE_PROFIT_VOLATILE'
             return 'TAKE_PROFIT'
         
-        # Faster stop loss in high volatility
+        # Quick stop loss in high volatility
         if current_pnl <= adjusted_stop_loss:
             return 'STOP_LOSS'
         
@@ -1232,6 +1260,121 @@ Value at Risk Analysis:
         return (trend > self.bull_market_threshold and 
                 short_trend > 0 and medium_trend > 0 and 
                 short_trend > medium_trend)
+
+    def simulate_alternative_strategy(self, current_price: float, actual_decision: str) -> Dict:
+        """Simulate alternative trading decisions to learn from missed opportunities"""
+        alternatives = {
+            'HOLD': {'action': 'HOLD', 'profit': 0, 'reason': 'baseline'},
+            'BUY': {'action': 'BUY', 'profit': 0, 'reason': 'alternative'},
+            'SELL': {'action': 'SELL', 'profit': 0, 'reason': 'alternative'}
+        }
+        
+        # Get next 10 price points for simulation
+        future_prices = [price for price, _ in self.price_history[-10:]]
+        if len(future_prices) < 10:
+            return {}
+        
+        # Simulate each alternative
+        for action in alternatives.keys():
+            if action == actual_decision:
+                continue
+            
+            sim_profit = self._simulate_trade(action, current_price, future_prices)
+            alternatives[action]['profit'] = sim_profit
+            
+            # Log if we missed a better opportunity
+            if sim_profit > 0 and sim_profit > self.profit_target:
+                logging.info(f"""
+Missed Opportunity Analysis:
+  Actual Decision: {actual_decision}
+  Better Alternative: {action}
+  Potential Profit: {sim_profit:.2%}
+  Market Condition: {self.analyze_market_condition()}
+  Volatility: {self.calculate_volatility():.4f}
+""")
+                
+                # Store learning data
+                self.learning_data['missed_opportunities'].append({
+                    'timestamp': datetime.now().isoformat(),
+                    'actual_decision': actual_decision,
+                    'better_alternative': action,
+                    'potential_profit': sim_profit,
+                    'market_context': {
+                        'condition': self.analyze_market_condition(),
+                        'volatility': self.calculate_volatility(),
+                        'price': current_price
+                    }
+                })
+        
+        return alternatives
+
+    def _simulate_trade(self, action: str, entry_price: float, future_prices: List[float]) -> float:
+        """Simulate a trade with future price data"""
+        if action == 'HOLD':
+            return 0
+        
+        # Simulate BUY
+        if action == 'BUY':
+            # Find best exit in future prices
+            max_price = max(future_prices)
+            return (max_price - entry_price) / entry_price
+        
+        # Simulate SELL
+        if action == 'SELL':
+            # Find lowest price (best avoided loss)
+            min_price = min(future_prices)
+            return (entry_price - min_price) / entry_price
+        
+        return 0
+
+    def learn_from_alternatives(self):
+        """Analyze missed opportunities to adjust strategy"""
+        if not self.learning_data.get('missed_opportunities'):
+            return
+        
+        # Analyze recent missed opportunities
+        recent_misses = [
+            miss for miss in self.learning_data['missed_opportunities']
+            if (datetime.now() - datetime.fromisoformat(miss['timestamp'])).days < 7
+        ]
+        
+        if not recent_misses:
+            return
+        
+        # Calculate success rates for different conditions
+        condition_stats = {}
+        for miss in recent_misses:
+            condition = miss['market_context']['condition']
+            if condition not in condition_stats:
+                condition_stats[condition] = {
+                    'count': 0,
+                    'avg_profit': 0,
+                    'better_actions': {'BUY': 0, 'SELL': 0, 'HOLD': 0}
+                }
+            
+            stats = condition_stats[condition]
+            stats['count'] += 1
+            stats['avg_profit'] = (stats['avg_profit'] * (stats['count'] - 1) + 
+                                 miss['potential_profit']) / stats['count']
+            stats['better_actions'][miss['better_alternative']] += 1
+        
+        # Adjust strategy based on findings
+        for condition, stats in condition_stats.items():
+            if stats['count'] >= 5:  # Need minimum samples
+                # If we consistently miss opportunities in certain conditions
+                if stats['avg_profit'] > self.profit_target:
+                    # Adjust condition multipliers
+                    if 'BUY' in stats['better_actions'] and stats['better_actions']['BUY'] > stats['count'] * 0.6:
+                        self.condition_multipliers[condition] *= 1.1  # More aggressive
+                    elif 'SELL' in stats['better_actions'] and stats['better_actions']['SELL'] > stats['count'] * 0.6:
+                        self.condition_multipliers[condition] *= 0.9  # More conservative
+        
+        logging.info(f"""
+Strategy Adjustment Based on Missed Opportunities:
+  Total Missed Opportunities: {len(recent_misses)}
+  Condition Stats: {json.dumps(condition_stats, indent=2)}
+  Updated Multipliers: {json.dumps(self.condition_multipliers, indent=2)}
+""")
 
 def main():
     """Main bot loop with enhanced monitoring"""
