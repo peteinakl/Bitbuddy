@@ -9,6 +9,7 @@ from typing import Dict, List, Tuple, Optional
 import numpy as np
 import pandas as pd
 from datetime import timedelta
+import traceback
 
 # Configure logging
 logging.basicConfig(
@@ -98,8 +99,8 @@ class BitcoinTradingBot:
         self.min_position_size = 0.50    # Increased from 0.40
         self.max_position_size = 0.90    # Increased from 0.80
         self.position_step = 0.15        # Larger steps
-        self.scalp_threshold = 0.0015    # More sensitive
-        self.profit_target = 0.005       # 0.5% target
+        self.scalp_threshold = 0.0005    # Reduced from 0.0008
+        self.profit_target = 0.004       # 0.5% target
         self.stop_loss = -0.003         # Tighter stop
         self.trailing_stop = 0.002      # Tighter trailing
         
@@ -185,11 +186,11 @@ class BitcoinTradingBot:
             'NEUTRAL': 1.0            # Full size
         }
         
-        # Momentum thresholds
+        # More responsive momentum thresholds
         self.momentum_thresholds = {
-            'strong': 0.0008,
-            'medium': 0.0005,
-            'weak': 0.0003
+            'strong': 0.0003,  # Reduced from 0.0004
+            'medium': 0.0001,  # Reduced from 0.0002
+            'weak': 0.00005    # Reduced from 0.0001
         }
         
         # Bull market parameters
@@ -201,6 +202,56 @@ class BitcoinTradingBot:
         self.volatility_multiplier = 1.0
         self.max_volatility = 0.02      # 2% max volatility threshold
         self.min_trade_size = 100       # Minimum trade size in USD
+        
+        # Add time-based trading parameters
+        self.time_restrictions = {
+            # Day of week (0 = Monday, 6 = Sunday)
+            'day_multipliers': {
+                0: 1.0,    # Monday - normal
+                1: 1.0,    # Tuesday - normal
+                2: 1.0,    # Wednesday - normal
+                3: 1.0,    # Thursday - normal
+                4: 0.8,    # Friday - more cautious
+                5: 0.5,    # Saturday - very cautious
+                6: 0.5     # Sunday - very cautious
+            },
+            # Hour of day (24-hour format)
+            'hour_multipliers': {
+                'active_hours': range(8, 22),     # 8 AM to 10 PM
+                'peak_hours': [14, 15, 16, 17],   # 2 PM to 5 PM
+                'quiet_hours': range(0, 8),       # Midnight to 8 AM
+                'peak_multiplier': 1.2,
+                'quiet_multiplier': 0.5
+            }
+        }
+        
+        # Add adaptive threshold tracking
+        self.threshold_history = {
+            'momentum': {
+                'successful_values': [],  # Store thresholds that led to profitable trades
+                'failed_values': [],      # Store thresholds that led to losses
+                'market_specific': {}     # Store optimal values for different market conditions
+            },
+            'position_sizing': {
+                'successful_values': [],
+                'failed_values': [],
+                'volatility_adjusted': {}
+            },
+            'time_windows': {
+                'optimal_entry_times': {},
+                'worst_entry_times': {},
+                'market_specific_timing': {}
+            }
+        }
+        
+        # Add threshold adaptation parameters
+        self.adaptation_config = {
+            'min_samples': 20,           # Minimum trades before adapting
+            'learning_rate': 0.1,        # How quickly to adjust thresholds
+            'update_frequency': 50,      # Trades between threshold updates
+            'market_weight': 0.7,        # Weight for market-specific adjustments
+            'volatility_weight': 0.3     # Weight for volatility adjustments
+        }
 
     def setup_logging(self):
         """Setup enhanced logging configuration"""
@@ -454,26 +505,76 @@ class BitcoinTradingBot:
         
         return "NEUTRAL"
 
-    def execute_trade(self, action: str, amount: float, price: float):
-        """Execute a trade and update portfolio"""
+    def execute_trade(self, action: str, amount: float, price: float, reason: str = ""):
+        """Execute a trade and update portfolio with proper tracking"""
+        # Pre-trade validation
         if action == "BUY":
             cost = amount * price
-            if cost <= self.capital:
-                self.btc_holdings += amount
-                self.capital -= cost
-                self.position_stack.append({
-                    'amount': amount,
-                    'entry_price': price,
-                    'timestamp': datetime.now()
-                })
-                logging.info(f"BUY: {amount:.8f} BTC at ${price:,.2f}")
-        
+            if cost > self.capital:
+                logging.warning(f"Insufficient funds for BUY: Need ${cost:,.2f}, have ${self.capital:,.2f}")
+                return False
+            if cost < 10:  # Minimum trade size
+                logging.warning(f"Trade size too small: ${cost:,.2f} < $10.00")
+                return False
         elif action == "SELL":
-            if amount <= self.btc_holdings:
-                revenue = amount * price
-                self.btc_holdings -= amount
-                self.capital += revenue
-                logging.info(f"SELL: {amount:.8f} BTC at ${price:,.2f}")
+            if amount > self.btc_holdings:
+                logging.warning(f"Insufficient BTC for SELL: Need {amount:.8f} BTC, have {self.btc_holdings:.8f} BTC")
+                return False
+            if amount * price < 10:  # Minimum trade size
+                logging.warning(f"Trade size too small: ${amount * price:,.2f} < $10.00")
+                return False
+
+        # Record pre-trade state
+        trade_result = {
+            'action': action,
+            'amount': amount,
+            'price': price,
+            'timestamp': datetime.now().isoformat(),
+            'portfolio_value_before': self.capital + (self.btc_holdings * price),
+            'reason': reason
+        }
+
+        # Execute trade
+        if action == "BUY":
+            self.btc_holdings += amount
+            self.capital -= cost
+            self.position_stack.append({
+                'amount': amount,
+                'entry_price': price,
+                'timestamp': datetime.now(),
+                'active': True,
+                'type': 'ENTRY',
+                'reason': reason
+            })
+            logging.info(f"BUY: {amount:.8f} BTC at ${price:,.2f} ({reason})")
+        elif action == "SELL":
+            revenue = amount * price
+            self.btc_holdings -= amount
+            self.capital += revenue
+            logging.info(f"SELL: {amount:.8f} BTC at ${price:,.2f} ({reason})")
+
+        # Record post-trade state
+        trade_result['portfolio_value_after'] = self.capital + (self.btc_holdings * price)
+        trade_result['pnl'] = trade_result['portfolio_value_after'] - trade_result['portfolio_value_before']
+        trade_result['pnl_percentage'] = (trade_result['pnl'] / trade_result['portfolio_value_before']) * 100
+
+        # Update trade history
+        self.trade_history.append(trade_result)
+        self.save_trade_history()
+
+        # Store threshold data with trade
+        trade_result.update({
+            'momentum_threshold': self.momentum_thresholds['strong'],
+            'position_size': amount * price / (self.capital + (self.btc_holdings * price)),
+            'market_volatility': self.calculate_volatility(),
+            'market_condition': self.analyze_market_condition()
+        })
+        
+        # Update adaptive thresholds periodically
+        if len(self.trade_history) % self.adaptation_config['update_frequency'] == 0:
+            self.update_adaptive_thresholds()
+
+        return True
 
     def log_market_data(self, data: Dict):
         """Log market data to CSV file"""
@@ -493,19 +594,6 @@ class BitcoinTradingBot:
         
         portfolio_value = self.capital + (self.btc_holdings * current_price)
         roi = ((portfolio_value - self.initial_capital) / self.initial_capital) * 100
-        
-        report = {
-            "timestamp": datetime.now().isoformat(),
-            "initial_capital": self.initial_capital,
-            "final_portfolio_value": portfolio_value,
-            "roi_percentage": roi,
-            "total_trades": len(self.trade_history),
-            "btc_holdings": self.btc_holdings,
-            "cash_balance": self.capital
-        }
-        
-        with open('performance_report.json', 'w') as f:
-            json.dump(report, f, indent=4)
 
     def ensure_market_data_file(self):
         """Create market data file if it doesn't exist"""
@@ -658,65 +746,72 @@ RISK METRICS
         return 0.5
 
     def execute_trade_decision(self):
-        """Execute trading strategy with alternative analysis"""
+        """Execute trading strategy with complete trade cycle"""
         current_price = self.fetch_bitcoin_price()
         if current_price is None:
             return
         
-        # Make actual trading decision
-        decision = self._get_trade_decision(current_price)
-        
-        # Need to add position management here
+        # First manage existing positions
         for position in self.position_stack:
             if position.get('active', True):
                 action = self.manage_position(position, current_price, self.analyze_market_condition())
                 if action != 'HOLD':
-                    self._execute_exit_trade(position, current_price, action, 
+                    success = self._execute_exit_trade(position, current_price, action, 
                         (current_price - position['entry_price']) / position['entry_price'],
                         position['amount'])
+                    if success:
+                        logging.info(f"Successfully executed {action} exit trade")
         
-        # Log decision analysis
+        # Then make new trade decision
+        decision = self._get_trade_decision(current_price)
+        
+        # Log decision analysis with portfolio state
         logging.info(f"""
-Trade Decision:
+Trade Decision Analysis:
   Action: {decision['action']}
   Amount: {decision.get('amount', 0):.8f} BTC
   Reason: {decision.get('reason', 'N/A')}
   Market Condition: {self.analyze_market_condition()}
   Current Price: ${current_price:,.2f}
+  Cash Available: ${self.capital:,.2f}
+  BTC Holdings: {self.btc_holdings:.8f}
+  Portfolio Value: ${self.capital + (self.btc_holdings * current_price):,.2f}
 """)
         
-        # Execute actual trade
-        if decision['action'] == 'BUY':
-            self.execute_trade('BUY', decision['amount'], current_price)
-            # Add to position stack
-            self.position_stack.append({
-                'amount': decision['amount'],
-                'entry_price': current_price,
-                'timestamp': datetime.now(),
-                'active': True,
-                'reason': decision['reason']
-            })
-        elif decision['action'] == 'SELL':
-            self.execute_trade('SELL', decision['amount'], current_price)
+        # Execute trade if conditions are met
+        if decision['action'] == 'BUY' and self.capital > 0:  # Check for available cash
+            success = self.execute_trade('BUY', decision['amount'], current_price, decision['reason'])
+            if success:
+                logging.info(f"Successfully executed BUY trade")
+        elif decision['action'] == 'SELL' and self.btc_holdings > 0:  # Check for available BTC
+            success = self.execute_trade('SELL', decision['amount'], current_price, decision['reason'])
+            if success:
+                logging.info(f"Successfully executed SELL trade")
         
-        # Simulate alternatives for learning
-        alternatives = self.simulate_alternative_strategy(current_price, decision['action'])
-        self.learn_from_alternatives()
+        # Save state after trade
+        self.save_bot_state()
 
     def _get_trade_decision(self, current_price: float) -> Dict:
-        """Get trading decision with enhanced trend following"""
+        """Get trading decision with improved market adaptation"""
         market_condition = self.analyze_market_condition()
         momentum = self.analyze_market_momentum()
+        
+        # Validate entry conditions first
+        if not self._validate_entry_conditions(market_condition, momentum, current_price):
+            return {
+                'action': 'HOLD',
+                'amount': 0,
+                'reason': 'ENTRY_VALIDATION_FAILED'
+            }
         
         # Calculate position size
         position_size = self.calculate_optimal_position_size(current_price, momentum['strength'])
         entry_fraction = self.calculate_position_fraction(market_condition, momentum, current_price)
         
-        # Entry conditions
+        # More aggressive entry conditions
         if len(self.position_stack) < self.max_positions:
-            # Buy in strong trends or accumulate in ranging markets
             if ((market_condition in ['STRONG_BULLISH', 'BULLISH'] and momentum['direction'] == 'up') or
-                (market_condition == 'RANGING' and momentum['strength'] > self.scalp_threshold * 0.5)):
+                (market_condition in ['NEUTRAL', 'RANGING'] and momentum['strength'] > self.momentum_thresholds['weak'])):
                 
                 amount = (position_size * entry_fraction) / current_price
                 if amount * current_price >= 10:  # Minimum $10 trade
@@ -726,19 +821,6 @@ Trade Decision:
                         'reason': f"{market_condition}_MOMENTUM"
                     }
         
-        # Exit conditions
-        if self.btc_holdings > 0:
-            # Sell in bearish conditions or take profits in volatility
-            if ((market_condition in ['STRONG_BEARISH', 'BEARISH'] and momentum['direction'] == 'down') or
-                (market_condition == 'VOLATILE_RANGE' and momentum['strength'] > self.scalp_threshold)):
-                
-                amount = self.btc_holdings * entry_fraction
-                return {
-                    'action': 'SELL',
-                    'amount': amount,
-                    'reason': f"{market_condition}_MOMENTUM"
-                }
-        
         return {
             'action': 'HOLD',
             'amount': 0,
@@ -747,7 +829,7 @@ Trade Decision:
 
     def _execute_exit_trade(self, position, current_price, reason, profit_pct, exit_amount):
         """Execute partial or full position exits with proper tracking"""
-        self.execute_trade("SELL", exit_amount, current_price)
+        self.execute_trade("SELL", exit_amount, current_price, reason)
         
         # Update position
         position['amount'] -= exit_amount
@@ -878,37 +960,25 @@ Trade Decision:
         return True
 
     def manage_position(self, position: Dict, current_price: float, market_condition: str):
-        """Enhanced position management with trend following"""
+        """Enhanced position management with dynamic adjustments"""
         entry_price = position['entry_price']
         current_pnl = (current_price - entry_price) / entry_price
         
-        # Dynamic thresholds based on market condition
-        if market_condition in ['STRONG_BULLISH', 'BULLISH']:
-            # Let profits run in strong trends
-            adjusted_profit_target = self.profit_target * 2
-            adjusted_stop_loss = self.stop_loss * 1.5  # Wider stops
+        # Tighter stops in bearish markets
+        if market_condition in ['STRONG_BEARISH', 'BEARISH']:
+            adjusted_stop_loss = self.stop_loss * 0.75  # 25% tighter
+            adjusted_trailing_stop = self.trailing_stop * 0.5  # 50% tighter
         else:
-            # Take profits quicker in other conditions
-            adjusted_profit_target = self.profit_target
             adjusted_stop_loss = self.stop_loss
-        
-        # Trailing stop management
-        if current_pnl > adjusted_profit_target * 0.5:
-            if not self.trailing_active:
-                self.trailing_active = True
-                self.trailing_price = current_price
-            elif current_price > self.trailing_price:
-                self.trailing_price = current_price
-                # Tighten stop as profits increase
-                self.trailing_stop = max(0.002, self.trailing_stop * (1 - current_pnl))
-            elif current_price < self.trailing_price * (1 - self.trailing_stop):
-                return 'TRAILING_STOP'
+            adjusted_trailing_stop = self.trailing_stop
         
         # Exit conditions
-        if current_pnl >= adjusted_profit_target:
+        if current_pnl >= self.profit_target:
             return 'TAKE_PROFIT'
         elif current_pnl <= adjusted_stop_loss:
             return 'STOP_LOSS'
+        elif market_condition == 'STRONG_BEARISH' and current_pnl > 0:
+            return 'TAKE_PROFIT_BEARISH'
         
         return 'HOLD'
 
@@ -1045,6 +1115,13 @@ Trade Decision:
     def save_bot_state(self):
         """Save complete bot state with all performance data"""
         try:
+            # Helper function to convert datetime objects
+            def datetime_handler(obj):
+                if isinstance(obj, datetime):
+                    return obj.isoformat()
+                raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
+            
+            # Prepare state data with datetime serialization
             state = {
                 'timestamp': datetime.now().isoformat(),
                 'portfolio': {
@@ -1052,12 +1129,15 @@ Trade Decision:
                     'current_capital': self.capital,
                     'btc_holdings': self.btc_holdings,
                     'position_stack': [
-                        {**pos, 'timestamp': pos['timestamp'].isoformat()} 
+                        {
+                            **pos,
+                            'timestamp': pos['timestamp'].isoformat() if isinstance(pos.get('timestamp'), datetime) else pos.get('timestamp')
+                        }
                         for pos in self.position_stack
                     ]
                 },
                 'performance': {
-                    'trade_history': self.trade_history,
+                    'trade_history': self.trade_history,  # Already has ISO format timestamps
                     'trade_success_rate': self.trade_success_rate,
                     'market_trends': self.market_trends,
                     'learning_data': self.learning_data
@@ -1068,19 +1148,36 @@ Trade Decision:
                     'scalp_threshold': float(self.scalp_threshold),
                     'trailing_stop': float(self.trailing_stop),
                     'strategy_weights': {k: float(v) for k, v in self.strategy_weights.items()}
+                },
+                'learned_parameters': {
+                    'momentum_thresholds': self.threshold_history['momentum'],
+                    'position_sizing': self.threshold_history['position_sizing'],
+                    'market_specific': self.threshold_history['market_specific'],
+                    'optimal_values': {
+                        condition: {
+                            'momentum': np.mean([t['momentum'] for t in data['successful_thresholds']]) 
+                            if data['successful_thresholds'] else None,
+                            'position_size': np.mean([t['position_size'] for t in data['successful_thresholds']])
+                            if data['successful_thresholds'] else None
+                        }
+                        for condition, data in self.market_conditions.items()
+                        if data['successful_thresholds']
+                    }
                 }
             }
             
-            # Save to both JSON files for redundancy
+            # Save to files using the datetime handler
             with open('bot_state.json', 'w') as f:
-                json.dump(state, f, indent=4)
+                json.dump(state, f, indent=4, default=datetime_handler)
             with open('learning_data.json', 'w') as f:
-                json.dump(state['performance']['learning_data'], f, indent=4)
+                json.dump(state['performance']['learning_data'], f, indent=4, default=datetime_handler)
             
             logging.info("Bot state and learning data saved successfully")
             
         except Exception as e:
             logging.error(f"Error saving bot state: {str(e)}")
+            # Log the full error traceback for debugging
+            logging.error(traceback.format_exc())
 
     def load_bot_state(self):
         """Load complete bot state with all performance data"""
@@ -1112,6 +1209,19 @@ Trade Decision:
                 self.scalp_threshold = float(state['trading_parameters']['scalp_threshold'])
                 self.trailing_stop = float(state['trading_parameters']['trailing_stop'])
                 self.strategy_weights = {k: float(v) for k, v in state['trading_parameters']['strategy_weights'].items()}
+                
+                # Load learned parameters if they exist
+                if 'learned_parameters' in state:
+                    self.threshold_history = {
+                        'momentum': state['learned_parameters']['momentum_thresholds'],
+                        'position_sizing': state['learned_parameters']['position_sizing'],
+                        'market_specific': state['learned_parameters']['market_specific']
+                    }
+                    
+                    # Apply any stored optimal values
+                    for condition, values in state['learned_parameters']['optimal_values'].items():
+                        if values['momentum'] is not None:
+                            self.momentum_thresholds[condition] = values['momentum']
                 
                 logging.info("Bot state loaded successfully")
                 return
@@ -1375,6 +1485,101 @@ Strategy Adjustment Based on Missed Opportunities:
   Condition Stats: {json.dumps(condition_stats, indent=2)}
   Updated Multipliers: {json.dumps(self.condition_multipliers, indent=2)}
 """)
+
+    def _validate_entry_conditions(self, market_condition: str, momentum: Dict, current_price: float) -> bool:
+        """Validate entry conditions including time-based factors"""
+        current_time = datetime.now()
+        
+        # Check hour restrictions - only avoid very quiet hours
+        if current_time.hour in range(2, 6):  # Most quiet period
+            return False
+        
+        # Check recent price action
+        if len(self.price_history) < self.momentum_window:
+            return False
+        
+        recent_prices = [price for price, _ in self.price_history[-5:]]
+        price_trend = all(p2 >= p1 for p1, p2 in zip(recent_prices, recent_prices[1:]))
+        
+        # More stringent conditions only in STRONG_BEARISH markets
+        if market_condition == 'STRONG_BEARISH':
+            return (momentum['strength'] > self.momentum_thresholds['strong'] and
+                    price_trend)
+        
+        return True
+
+    def update_adaptive_thresholds(self):
+        """Update thresholds based on trading performance"""
+        if len(self.trade_history) < self.adaptation_config['min_samples']:
+            return
+        
+        # Calculate success rates for different threshold values
+        recent_trades = self.trade_history[-self.adaptation_config['min_samples']:]
+        market_conditions = {}
+        
+        for trade in recent_trades:
+            condition = trade['market_condition']
+            if condition not in market_conditions:
+                market_conditions[condition] = {
+                    'successful_thresholds': [],
+                    'failed_thresholds': []
+                }
+            
+            # Store threshold values based on trade success
+            if trade['pnl'] > 0:
+                market_conditions[condition]['successful_thresholds'].append({
+                    'momentum': trade['momentum_threshold'],
+                    'position_size': trade['position_size'],
+                    'volatility': trade['market_volatility']
+                })
+            else:
+                market_conditions[condition]['failed_thresholds'].append({
+                    'momentum': trade['momentum_threshold'],
+                    'position_size': trade['position_size'],
+                    'volatility': trade['market_volatility']
+                })
+        
+        # Update thresholds for each market condition
+        for condition, data in market_conditions.items():
+            if len(data['successful_thresholds']) > 5:  # Minimum successful trades
+                # Calculate optimal values
+                optimal_momentum = np.mean([t['momentum'] for t in data['successful_thresholds']])
+                optimal_position = np.mean([t['position_size'] for t in data['successful_thresholds']])
+                
+                # Adjust current thresholds
+                current_market = self.analyze_market_condition()
+                if current_market == condition:
+                    self.momentum_thresholds['strong'] = self._adjust_threshold(
+                        self.momentum_thresholds['strong'],
+                        optimal_momentum,
+                        self.adaptation_config['learning_rate']
+                    )
+                    self.position_step = self._adjust_threshold(
+                        self.position_step,
+                        optimal_position,
+                        self.adaptation_config['learning_rate']
+                    )
+
+    def _adjust_threshold(self, current: float, optimal: float, learning_rate: float) -> float:
+        """Smoothly adjust threshold towards optimal value"""
+        adjustment = (optimal - current) * learning_rate
+        new_value = current + adjustment
+        
+        # Apply volatility adjustment
+        volatility = self.calculate_volatility()
+        if volatility > self.max_volatility:
+            new_value *= (1 + self.adaptation_config['volatility_weight'])
+        
+        # Log adjustment
+        logging.info(f"""
+Threshold Adjustment:
+  Current: {current:.6f}
+  Optimal: {optimal:.6f}
+  New Value: {new_value:.6f}
+  Volatility Adjustment: {volatility:.6f}
+""")
+        
+        return new_value
 
 def main():
     """Main bot loop with enhanced monitoring"""
