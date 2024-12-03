@@ -804,34 +804,23 @@ Trade Decision Analysis:
         self.save_bot_state()
 
     def _get_trade_decision(self, current_price: float) -> Dict:
-        """Get trading decision with improved market adaptation"""
+        """Get trading decision with improved cash management"""
         market_condition = self.analyze_market_condition()
         momentum = self.analyze_market_momentum()
         
-        # Validate entry conditions first
-        if not self._validate_entry_conditions(market_condition, momentum, current_price):
-            return {
-                'action': 'HOLD',
-                'amount': 0,
-                'reason': 'ENTRY_VALIDATION_FAILED'
-            }
-        
-        # Calculate position size
-        position_size = self.calculate_optimal_position_size(current_price, momentum['strength'])
-        entry_fraction = self.calculate_position_fraction(market_condition, momentum, current_price)
+        # Calculate buy amount with cash management
+        buy_amount = self.calculate_buy_amount(current_price, market_condition)
         
         # More aggressive entry conditions
-        if len(self.position_stack) < self.max_positions:
+        if len(self.position_stack) < self.max_positions and buy_amount > 0:
             if ((market_condition in ['STRONG_BULLISH', 'BULLISH'] and momentum['direction'] == 'up') or
                 (market_condition in ['NEUTRAL', 'RANGING'] and momentum['strength'] > self.momentum_thresholds['weak'])):
                 
-                amount = (position_size * entry_fraction) / current_price
-                if amount * current_price >= 10:  # Minimum $10 trade
-                    return {
-                        'action': 'BUY',
-                        'amount': amount,
-                        'reason': f"{market_condition}_MOMENTUM"
-                    }
+                return {
+                    'action': 'BUY',
+                    'amount': buy_amount,
+                    'reason': f"{market_condition}_MOMENTUM"
+                }
         
         return {
             'action': 'HOLD',
@@ -972,27 +961,45 @@ Trade Decision Analysis:
         return True
 
     def manage_position(self, position: Dict, current_price: float, market_condition: str):
-        """Enhanced position management with dynamic adjustments"""
+        """Enhanced position management with partial selling"""
         entry_price = position['entry_price']
         current_pnl = (current_price - entry_price) / entry_price
         
-        # Tighter stops in bearish markets
-        if market_condition in ['STRONG_BEARISH', 'BEARISH']:
-            adjusted_stop_loss = self.stop_loss * 0.75  # 25% tighter
-            adjusted_trailing_stop = self.trailing_stop * 0.5  # 50% tighter
+        # Partial selling in strong bearish conditions
+        if market_condition == 'STRONG_BEARISH':
+            # Sell 50% of position if we have any profit
+            if current_pnl > 0:
+                sell_amount = position['amount'] * 0.5
+                if sell_amount * current_price >= 10:  # Minimum trade size check
+                    return {
+                        'action': 'PARTIAL_SELL',
+                        'amount': sell_amount,
+                        'reason': 'BEARISH_PROFIT_PROTECT'
+                    }
+            # Tighter stops in bearish market
+            adjusted_stop_loss = self.stop_loss * 0.75
         else:
             adjusted_stop_loss = self.stop_loss
-            adjusted_trailing_stop = self.trailing_stop
         
-        # Exit conditions
+        # Normal exit conditions
         if current_pnl >= self.profit_target:
-            return 'TAKE_PROFIT'
+            return {
+                'action': 'SELL',
+                'amount': position['amount'],
+                'reason': 'TAKE_PROFIT'
+            }
         elif current_pnl <= adjusted_stop_loss:
-            return 'STOP_LOSS'
-        elif market_condition == 'STRONG_BEARISH' and current_pnl > 0:
-            return 'TAKE_PROFIT_BEARISH'
+            return {
+                'action': 'SELL',
+                'amount': position['amount'],
+                'reason': 'STOP_LOSS'
+            }
         
-        return 'HOLD'
+        return {
+            'action': 'HOLD',
+            'amount': 0,
+            'reason': 'NO_SIGNAL'
+        }
 
     def update_learning_data(self, trade_result: Dict):
         """Update learning data after each trade"""
@@ -1595,6 +1602,27 @@ Threshold Adjustment:
 """)
         
         return new_value
+
+    def calculate_buy_amount(self, current_price: float, market_condition: str) -> float:
+        """Calculate optimal buy amount with cash management"""
+        portfolio_value = self.capital + (self.btc_holdings * current_price)
+        
+        # Base position size on market condition
+        if market_condition == 'STRONG_BULLISH':
+            target_allocation = 0.30  # Use 30% of available cash
+        elif market_condition == 'BULLISH':
+            target_allocation = 0.20  # Use 20% of available cash
+        else:
+            target_allocation = 0.10  # Use 10% of available cash
+        
+        # Calculate maximum buy amount
+        max_buy_amount = (self.capital * target_allocation) / current_price
+        
+        # Ensure minimum trade size
+        if max_buy_amount * current_price < 10:
+            return 0
+        
+        return max_buy_amount
 
 def main():
     """Main bot loop with enhanced monitoring"""

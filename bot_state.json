@@ -1,0 +1,117 @@
+{
+    "timestamp": "2024-12-04T08:50:12.656423",
+    "portfolio": {
+        "initial_capital": 10000.0,
+        "current_capital": 0,
+        "btc_holdings": 0.1047880564830194,
+        "position_stack": []
+    },
+    "performance": {
+        "trade_history": [],
+        "trade_success_rate": {
+            "total_trades": 0,
+            "profitable_trades": 0,
+            "success_rate": 0.0
+        },
+        "market_trends": {
+            "STRONG_BULLISH": {
+                "successful_thresholds": [],
+                "failed_thresholds": [],
+                "trades": []
+            },
+            "BULLISH": {
+                "successful_thresholds": [],
+                "failed_thresholds": [],
+                "trades": []
+            },
+            "NEUTRAL": {
+                "successful_thresholds": [],
+                "failed_thresholds": [],
+                "trades": []
+            },
+            "BEARISH": {
+                "successful_thresholds": [],
+                "failed_thresholds": [],
+                "trades": []
+            },
+            "STRONG_BEARISH": {
+                "successful_thresholds": [],
+                "failed_thresholds": [],
+                "trades": []
+            },
+            "VOLATILE_RANGE": {
+                "successful_thresholds": [],
+                "failed_thresholds": [],
+                "trades": []
+            },
+            "RANGING": {
+                "successful_thresholds": [],
+                "failed_thresholds": [],
+                "trades": []
+            }
+        },
+        "learning_data": {
+            "successful_patterns": [],
+            "failed_patterns": [],
+            "market_conditions": {},
+            "time_patterns": {},
+            "position_sizes": {},
+            "holding_periods": {}
+        }
+    },
+    "trading_parameters": {
+        "profit_target": 0.004,
+        "stop_loss": -0.003,
+        "scalp_threshold": 0.0005,
+        "trailing_stop": 0.002,
+        "strategy_weights": {
+            "momentum": 1.0,
+            "trend": 1.0,
+            "volatility": 1.0,
+            "time_of_day": 1.0
+        }
+    },
+    "learned_parameters": {
+        "momentum_thresholds": {
+            "successful_values": [],
+            "failed_values": [],
+            "market_specific": {}
+        },
+        "position_sizing": {
+            "successful_values": [],
+            "failed_values": [],
+            "volatility_adjusted": {}
+        },
+        "market_specific": {},
+        "optimal_values": {
+            "STRONG_BULLISH": {
+                "momentum": null,
+                "position_size": null
+            },
+            "BULLISH": {
+                "momentum": null,
+                "position_size": null
+            },
+            "NEUTRAL": {
+                "momentum": null,
+                "position_size": null
+            },
+            "BEARISH": {
+                "momentum": null,
+                "position_size": null
+            },
+            "STRONG_BEARISH": {
+                "momentum": null,
+                "position_size": null
+            },
+            "VOLATILE_RANGE": {
+                "momentum": null,
+                "position_size": null
+            },
+            "RANGING": {
+                "momentum": null,
+                "position_size": null
+            }
+        }
+    }
+}
