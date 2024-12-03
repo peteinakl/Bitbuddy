@@ -92,16 +92,16 @@ class BitcoinTradingBot:
         else:
             logging.info(f"Bot initialized with portfolio value: ${self.capital:,.2f}")
         
-        # Trading parameters
+        # Trading parameters - more aggressive
         self.position_stack = []
         self.max_positions = 3
-        self.min_position_size = 0.40    # Increased from 0.35
-        self.max_position_size = 0.80    # Increased from 0.50
-        self.position_step = 0.10        # Larger steps
-        self.scalp_threshold = 0.001     # 0.1% movement threshold
-        self.profit_target = 0.004       # 0.4% profit target
-        self.stop_loss = -0.003         # 0.3% stop loss
-        self.trailing_stop = 0.002      # 0.2% trailing stop
+        self.min_position_size = 0.50    # Increased from 0.40
+        self.max_position_size = 0.90    # Increased from 0.80
+        self.position_step = 0.15        # Larger steps
+        self.scalp_threshold = 0.0015    # More sensitive
+        self.profit_target = 0.005       # 0.5% target
+        self.stop_loss = -0.003         # Tighter stop
+        self.trailing_stop = 0.002      # Tighter trailing
         
         # Add trailing stop loss
         self.trailing_active = False
@@ -174,15 +174,15 @@ class BitcoinTradingBot:
         self.max_position_size = 0.80    # Never go all-in
         self.position_step = 0.10        # Smaller steps
         
-        # Market condition thresholds
+        # Market condition thresholds - more aggressive
         self.condition_multipliers = {
-            'STRONG_BULLISH': 2.0,    # Double size in strong bulls
-            'BULLISH': 1.5,           # 50% more in bulls
-            'VOLATILE_RANGE': 1.0,    # Full size in volatility
-            'RANGING': 0.8,           # 80% size in range
-            'BEARISH': 0.5,           # Half size in bears
-            'STRONG_BEARISH': 0.3,    # Reduced size in strong bears
-            'NEUTRAL': 0.8            # 80% in neutral
+            'STRONG_BULLISH': 3.0,    # Triple size
+            'BULLISH': 2.0,           # Double size
+            'VOLATILE_RANGE': 1.5,    # 150% size
+            'RANGING': 1.0,           # Full size
+            'BEARISH': 0.7,           # 70% size
+            'STRONG_BEARISH': 0.5,    # Half size
+            'NEUTRAL': 1.0            # Full size
         }
         
         # Momentum thresholds
@@ -587,29 +587,26 @@ RISK METRICS
             f.write(status)
 
     def calculate_optimal_position_size(self, current_price: float, trend_strength: float) -> float:
-        """Calculate position size with portfolio consideration"""
+        """Calculate position size with aggressive trend following"""
         portfolio_value = self.capital + (self.btc_holdings * current_price)
-        
-        # Calculate available capital
-        available_capital = self.capital  # Should consider partial positions
         
         # Calculate volatility adjustment
         volatility = self.calculate_volatility()
-        volatility_factor = max(0.3, min(1.0, self.max_volatility / volatility if volatility > 0 else 1.0))
+        volatility_factor = max(0.5, min(1.5, self.max_volatility / volatility if volatility > 0 else 1.5))
         
-        # Base position size considering available capital
-        base_size = min(available_capital, portfolio_value * self.min_position_size * volatility_factor)
+        # Base position size with volatility adjustment
+        base_size = portfolio_value * self.min_position_size * volatility_factor
         
-        # Adjust for trend strength
-        trend_multiplier = min(2.0, max(0.5, 1.0 + trend_strength * 50))
+        # More aggressive trend multiplier
+        trend_multiplier = min(3.0, max(1.0, 1.0 + trend_strength * 100))
         position_size = base_size * trend_multiplier
         
-        # Ensure within limits
+        # Ensure within limits but allow larger positions in strong trends
         max_position = min(
-            portfolio_value * self.max_position_size * volatility_factor,
-            available_capital
+            portfolio_value * self.max_position_size * trend_multiplier,
+            portfolio_value * 0.95  # Allow up to 95% in very strong trends
         )
-        min_position = max(self.min_trade_size, portfolio_value * 0.1)
+        min_position = max(self.min_trade_size, portfolio_value * 0.2)  # Minimum 20% position
         
         return min(max_position, max(min_position, position_size))
 
@@ -707,7 +704,7 @@ Trade Decision:
         self.learn_from_alternatives()
 
     def _get_trade_decision(self, current_price: float) -> Dict:
-        """Get trading decision based on current market conditions"""
+        """Get trading decision with enhanced trend following"""
         market_condition = self.analyze_market_condition()
         momentum = self.analyze_market_momentum()
         
@@ -715,10 +712,12 @@ Trade Decision:
         position_size = self.calculate_optimal_position_size(current_price, momentum['strength'])
         entry_fraction = self.calculate_position_fraction(market_condition, momentum, current_price)
         
-        # More aggressive entry conditions
-        if market_condition in ['STRONG_BULLISH', 'BULLISH', 'VOLATILE_RANGE'] and len(self.position_stack) < self.max_positions:
-            # Buy on any upward momentum
-            if momentum['direction'] == 'up':
+        # Entry conditions
+        if len(self.position_stack) < self.max_positions:
+            # Buy in strong trends or accumulate in ranging markets
+            if ((market_condition in ['STRONG_BULLISH', 'BULLISH'] and momentum['direction'] == 'up') or
+                (market_condition == 'RANGING' and momentum['strength'] > self.scalp_threshold * 0.5)):
+                
                 amount = (position_size * entry_fraction) / current_price
                 if amount * current_price >= 10:  # Minimum $10 trade
                     return {
@@ -727,9 +726,12 @@ Trade Decision:
                         'reason': f"{market_condition}_MOMENTUM"
                     }
         
-        # More aggressive profit taking
-        elif market_condition in ['STRONG_BEARISH', 'BEARISH'] and self.btc_holdings > 0:
-            if momentum['direction'] == 'down':
+        # Exit conditions
+        if self.btc_holdings > 0:
+            # Sell in bearish conditions or take profits in volatility
+            if ((market_condition in ['STRONG_BEARISH', 'BEARISH'] and momentum['direction'] == 'down') or
+                (market_condition == 'VOLATILE_RANGE' and momentum['strength'] > self.scalp_threshold)):
+                
                 amount = self.btc_holdings * entry_fraction
                 return {
                     'action': 'SELL',
@@ -876,17 +878,19 @@ Trade Decision:
         return True
 
     def manage_position(self, position: Dict, current_price: float, market_condition: str):
-        """Enhanced position management for better gains"""
+        """Enhanced position management with trend following"""
         entry_price = position['entry_price']
         current_pnl = (current_price - entry_price) / entry_price
         
-        # Calculate volatility for adjustments
-        volatility = self.calculate_volatility()
-        volatility_adjustment = min(1.0, self.max_volatility / volatility if volatility > 0 else 1.0)
-        
-        # Dynamic thresholds
-        adjusted_profit_target = self.profit_target * (1 + volatility_adjustment)
-        adjusted_stop_loss = self.stop_loss * (1 + volatility_adjustment)
+        # Dynamic thresholds based on market condition
+        if market_condition in ['STRONG_BULLISH', 'BULLISH']:
+            # Let profits run in strong trends
+            adjusted_profit_target = self.profit_target * 2
+            adjusted_stop_loss = self.stop_loss * 1.5  # Wider stops
+        else:
+            # Take profits quicker in other conditions
+            adjusted_profit_target = self.profit_target
+            adjusted_stop_loss = self.stop_loss
         
         # Trailing stop management
         if current_pnl > adjusted_profit_target * 0.5:
@@ -896,18 +900,14 @@ Trade Decision:
             elif current_price > self.trailing_price:
                 self.trailing_price = current_price
                 # Tighten stop as profits increase
-                self.trailing_stop = max(0.001, self.trailing_stop * (1 - current_pnl))
+                self.trailing_stop = max(0.002, self.trailing_stop * (1 - current_pnl))
             elif current_price < self.trailing_price * (1 - self.trailing_stop):
                 return 'TRAILING_STOP'
         
-        # Take profits in volatile conditions
+        # Exit conditions
         if current_pnl >= adjusted_profit_target:
-            if volatility > self.max_volatility * 0.5:
-                return 'TAKE_PROFIT_VOLATILE'
             return 'TAKE_PROFIT'
-        
-        # Quick stop loss in high volatility
-        if current_pnl <= adjusted_stop_loss:
+        elif current_pnl <= adjusted_stop_loss:
             return 'STOP_LOSS'
         
         return 'HOLD'
