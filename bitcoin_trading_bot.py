@@ -124,11 +124,15 @@ class BitcoinTradingBot:
         self.last_data_refresh = None
         self.data_refresh_interval = 300  # 5 minutes
         
-        # Add market learning parameters
+        # Add market learning parameters with correct structure
         self.market_trends = {
-            'up_trends': [],    # Store successful upward trends
-            'down_trends': [],  # Store successful downward trends
-            'failed_trades': [] # Store failed trades for learning
+            condition: {
+                'successful_thresholds': [],
+                'failed_thresholds': [],
+                'trades': []
+            }
+            for condition in ['STRONG_BULLISH', 'BULLISH', 'NEUTRAL', 'BEARISH', 
+                             'STRONG_BEARISH', 'VOLATILE_RANGE', 'RANGING']
         }
         
         # Dynamic threshold adjustment
@@ -225,7 +229,7 @@ class BitcoinTradingBot:
             }
         }
         
-        # Add adaptive threshold tracking
+        # Add adaptive threshold tracking with correct structure
         self.threshold_history = {
             'momentum': {
                 'successful_values': [],  # Store thresholds that led to profitable trades
@@ -237,6 +241,7 @@ class BitcoinTradingBot:
                 'failed_values': [],
                 'volatility_adjusted': {}
             },
+            'market_specific': {},  # Add this at top level
             'time_windows': {
                 'optimal_entry_times': {},
                 'worst_entry_times': {},
@@ -1150,9 +1155,9 @@ Trade Decision Analysis:
                     'strategy_weights': {k: float(v) for k, v in self.strategy_weights.items()}
                 },
                 'learned_parameters': {
-                    'momentum_thresholds': self.threshold_history['momentum'],
-                    'position_sizing': self.threshold_history['position_sizing'],
-                    'market_specific': self.threshold_history['market_specific'],
+                    'momentum_thresholds': self.threshold_history.get('momentum', {}),
+                    'position_sizing': self.threshold_history.get('position_sizing', {}),
+                    'market_specific': self.threshold_history.get('market_specific', {}),
                     'optimal_values': {
                         condition: {
                             'momentum': np.mean([t['momentum'] for t in data['successful_thresholds']]) 
@@ -1160,13 +1165,12 @@ Trade Decision Analysis:
                             'position_size': np.mean([t['position_size'] for t in data['successful_thresholds']])
                             if data['successful_thresholds'] else None
                         }
-                        for condition, data in self.market_conditions.items()
-                        if data['successful_thresholds']
+                        for condition, data in self.market_trends.items()
                     }
                 }
             }
             
-            # Save to files using the datetime handler
+            # Save both files
             with open('bot_state.json', 'w') as f:
                 json.dump(state, f, indent=4, default=datetime_handler)
             with open('learning_data.json', 'w') as f:
@@ -1176,7 +1180,6 @@ Trade Decision Analysis:
             
         except Exception as e:
             logging.error(f"Error saving bot state: {str(e)}")
-            # Log the full error traceback for debugging
             logging.error(traceback.format_exc())
 
     def load_bot_state(self):
@@ -1218,9 +1221,14 @@ Trade Decision Analysis:
                         'market_specific': state['learned_parameters']['market_specific']
                     }
                     
-                    # Apply any stored optimal values
+                    # Apply any stored optimal values to market_trends
                     for condition, values in state['learned_parameters']['optimal_values'].items():
                         if values['momentum'] is not None:
+                            if condition not in self.market_trends:
+                                self.market_trends[condition] = {
+                                    'successful_thresholds': [],
+                                    'failed_thresholds': []
+                                }
                             self.momentum_thresholds[condition] = values['momentum']
                 
                 logging.info("Bot state loaded successfully")
@@ -1245,7 +1253,7 @@ Trade Decision Analysis:
         self.learning_data = {
             'successful_patterns': [],
             'failed_patterns': [],
-            'market_conditions': {
+            'market_trends': {
                 condition: {'total_trades': 0, 'successful_trades': 0, 'success_rate': 0.5}
                 for condition in ['STRONG_BULLISH', 'BULLISH', 'NEUTRAL', 'BEARISH', 
                                 'STRONG_BEARISH', 'VOLATILE_RANGE', 'RANGING']
