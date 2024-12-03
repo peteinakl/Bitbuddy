@@ -2,40 +2,29 @@
 ==================================================
 BITCOIN TRADING BOT - STATUS UPDATE
 ==================================================
-Time: 2024-12-03 13:29:52
+Time: 2024-12-03 14:31:55
 
 CURRENT MARKET
 -------------
-Bitcoin Price: $95,786.77
-24h Change: -0.04%
-Market Condition: STRONG_BEARISH
+Bitcoin Price: $95,646.04
+24h Change: 0.04%
+Market Condition: NEUTRAL
 
 PORTFOLIO SUMMARY
 ----------------
-Initial Capital: $10,000.00
-Current Portfolio Value: $10,029.28
-Total P/L: $29.28 (+0.29%)
-Cash Balance: $8,262.89
-BTC Holdings: 0.01844086 BTC ($1,766.39)
+Portfolio Value: $10,003.95
+Total P/L: $3.95 (+0.04%)
+Cash Balance: $0.00
+BTC Holdings: 0.10459351 BTC ($10,003.95)
 
 TRADING ACTIVITY
 ---------------
 Active Positions: 0
-Total Trades: 8
+Total Trades: 0
 
-ACTIVE POSITIONS
-----------------
-Position 1: 0.00000000 BTC @ $95,698.13 (P/L: +0.09%)
-Position 2: 0.00000000 BTC @ $95,662.92 (P/L: +0.13%)
-Position 3: 0.00000000 BTC @ $95,805.54 (P/L: -0.02%)
-Position 4: 0.00000000 BTC @ $95,967.70 (P/L: -0.19%)
-Position 5: 0.00000000 BTC @ $95,967.70 (P/L: -0.19%)
-Position 6: 0.00000000 BTC @ $96,025.80 (P/L: -0.25%)
-
-RECENT TRADES
--------------
-SELL: 0.02585106 BTC @ $95,860.54 (STOP_LOSS)
-SELL: 0.03876772 BTC @ $95,811.18 (STOP_LOSS)
-SELL: 0.03876772 BTC @ $95,811.18 (STOP_LOSS)
+RISK METRICS
+-----------
+95% Daily VaR: $0.00 (0.00% of portfolio)
+99% Daily VaR: $0.00 (0.00% of portfolio)
 
 ==================================================

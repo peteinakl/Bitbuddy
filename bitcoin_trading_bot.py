@@ -71,13 +71,26 @@ class BitcoinTradingBot:
         # Enhanced logging setup
         self.setup_logging()
         
-        # Core attributes with safe defaults
-        self.initial_capital = initial_capital or 10000.0
-        self.capital = self.initial_capital  # Set a default value
+        # Initialize core attributes without setting values
+        self.initial_capital = None
+        self.capital = None
         self.btc_holdings = 0.0
         
-        # Now load portfolio
+        # Load portfolio first (this will set initial_capital and capital)
         self.load_existing_portfolio()
+        
+        # Only use the passed initial_capital if no existing portfolio was loaded
+        if self.initial_capital is None:
+            self.initial_capital = initial_capital or 10000.0
+            self.capital = self.initial_capital
+        
+        # Get current portfolio value for logging
+        current_price = self.fetch_bitcoin_price()
+        if current_price:
+            portfolio_value = self.capital + (self.btc_holdings * current_price)
+            logging.info(f"Bot initialized with portfolio value: ${portfolio_value:,.2f}")
+        else:
+            logging.info(f"Bot initialized with portfolio value: ${self.capital:,.2f}")
         
         # Trading parameters
         self.position_stack = []
@@ -85,12 +98,12 @@ class BitcoinTradingBot:
         self.min_position_size = 0.35   # Increased from 0.25 for larger positions
         self.max_position_size = 0.50   # Increased from 0.40 for bigger opportunities
         self.position_step = 0.05       # For scaling into positions
-        self.scalp_threshold = 0.0005   # Reduced to catch smaller movements
-        self.profit_target = 0.002      # Reduced for quicker profits
-        self.stop_loss = -0.0015        # Adjusted for better risk/reward
+        self.scalp_threshold = 0.0015    # 0.15% movement threshold
+        self.profit_target = 0.005      # 0.5% profit target
+        self.stop_loss = -0.003         # 0.3% stop loss
         
         # Add trailing stop loss
-        self.trailing_stop = 0.0008     # Added tighter trailing stop
+        self.trailing_stop = 0.002      # 0.2% trailing stop
         self.trailing_active = False
         self.trailing_price = None
         
@@ -157,19 +170,19 @@ class BitcoinTradingBot:
         self.load_learning_data()
         
         # Position sizing parameters
-        self.min_position_size = 0.35   # Increased from 0.25 for larger positions
-        self.max_position_size = 0.50   # Increased from 0.40 for bigger opportunities
-        self.position_step = 0.05       # For scaling into positions
+        self.min_position_size = 0.30    # Start smaller
+        self.max_position_size = 0.70    # Never go all-in
+        self.position_step = 0.05        # Smaller steps
         
         # Market condition thresholds
         self.condition_multipliers = {
-            'STRONG_BULLISH': 1.5,    # Increased from 1.2
-            'BULLISH': 1.2,           # Increased from 1.0
-            'VOLATILE_RANGE': 0.8,    # Increased from 0.5
-            'RANGING': 0.5,           # Increased from 0.3
-            'BEARISH': 0.3,           # Changed from 0.0 to allow counter-trend
-            'STRONG_BEARISH': 0.2,    # Changed from 0.0 to allow counter-trend
-            'NEUTRAL': 0.4            # Increased from 0.3
+            'STRONG_BULLISH': 2.0,    # Aggressive in strong trends
+            'BULLISH': 1.5,
+            'VOLATILE_RANGE': 0.8,    # More cautious in volatile markets
+            'RANGING': 0.6,
+            'BEARISH': 0.4,          # Still trade in bear markets but smaller
+            'STRONG_BEARISH': 0.3,
+            'NEUTRAL': 0.5
         }
         
         # Momentum thresholds
@@ -179,7 +192,15 @@ class BitcoinTradingBot:
             'weak': 0.0003
         }
         
-        logging.info(f"Bot initialized with ${self.initial_capital:.2f} capital")
+        # Bull market parameters
+        self.bull_market_threshold = 0.02  # 2% uptrend defines bull market
+        self.hold_position_size = 0.90     # Hold up to 90% in bull markets
+        self.max_drawdown = 0.15           # Allow 15% drawdown in bull markets
+        
+        # Volatility management
+        self.volatility_multiplier = 1.0
+        self.max_volatility = 0.02      # 2% max volatility threshold
+        self.min_trade_size = 100       # Minimum trade size in USD
 
     def setup_logging(self):
         """Setup enhanced logging configuration"""
@@ -218,7 +239,33 @@ class BitcoinTradingBot:
         self.performance_logger.addHandler(performance_handler)
 
     def load_existing_portfolio(self):
-        """Initialize portfolio with 100% BTC position"""
+        """Initialize portfolio maintaining current balance"""
+        try:
+            # Try to load existing state first
+            with open('bot_state.json', 'r') as f:
+                state = json.load(f)
+                self.initial_capital = state['portfolio']['initial_capital']
+                current_capital = state['portfolio']['current_capital']
+                btc_holdings = state['portfolio']['btc_holdings']
+                
+                # Get current price to calculate current portfolio value
+                current_price = self.fetch_bitcoin_price()
+                if current_price:
+                    self.btc_holdings = btc_holdings
+                    self.capital = current_capital
+                    
+                    # Log portfolio restoration
+                    portfolio_value = self.capital + (self.btc_holdings * current_price)
+                    logging.info(f"Restored existing portfolio:")
+                    logging.info(f"BTC Holdings: {self.btc_holdings:.8f} BTC (${self.btc_holdings * current_price:,.2f})")
+                    logging.info(f"Cash Balance: ${self.capital:.2f}")
+                    logging.info(f"Total Portfolio Value: ${portfolio_value:,.2f}")
+                    return
+                    
+        except (FileNotFoundError, KeyError, json.JSONDecodeError) as e:
+            logging.warning(f"Could not load existing portfolio: {str(e)}")
+        
+        # If no valid state found, then initialize with 10000
         self.initial_capital = 10000.0
         current_price = self.fetch_bitcoin_price()
         
@@ -226,7 +273,7 @@ class BitcoinTradingBot:
             logging.error("Could not fetch price to initialize portfolio")
             return
         
-        # Always start with 100% BTC position
+        # Start with 100% BTC position
         self.btc_holdings = self.initial_capital / current_price
         self.capital = 0  # All capital in BTC
         
@@ -235,7 +282,7 @@ class BitcoinTradingBot:
             'amount': self.btc_holdings,
             'entry_price': current_price,
             'timestamp': datetime.now(),
-            'active': True,  # Explicitly mark as active
+            'active': True,
             'type': 'INITIAL'
         }
         
@@ -248,10 +295,10 @@ class BitcoinTradingBot:
             'price': current_price,
             'timestamp': datetime.now().isoformat(),
             'reason': 'PORTFOLIO_INITIALIZATION',
-            'active': True  # Mark as active in trade history
+            'active': True
         }]
         
-        logging.info(f"Initialized 100% BTC position:")
+        logging.info(f"Initialized new portfolio with 100% BTC position:")
         logging.info(f"BTC Holdings: {self.btc_holdings:.8f} BTC (${self.initial_capital:,.2f})")
         logging.info(f"Entry Price: ${current_price:,.2f}")
         logging.info(f"Cash Balance: ${self.capital:.2f}")
@@ -376,32 +423,33 @@ class BitcoinTradingBot:
         return (current_price - previous_price) / previous_price
 
     def analyze_market_condition(self) -> str:
-        """Enhanced market analysis with trend strength"""
+        """Enhanced market condition analysis with shorter timeframes"""
         if len(self.price_history) < self.momentum_window:
             return "NEUTRAL"
         
+        # Use multiple timeframes for better accuracy
         recent_prices = [price for price, _ in self.price_history[-self.momentum_window:]]
+        very_recent = recent_prices[-5:]  # Last 5 periods
         
-        # Calculate EMAs for better trend detection
-        ema_short = np.mean(recent_prices[-3:])
-        ema_medium = np.mean(recent_prices[-7:])
-        ema_long = np.mean(recent_prices)
+        # Calculate multiple EMAs
+        ema_fast = np.mean(very_recent)
+        ema_medium = np.mean(recent_prices[-10:])  # Last 10 periods
+        ema_slow = np.mean(recent_prices)
         
-        # Calculate trend strength
-        trend_strength = (ema_short - ema_long) / ema_long
+        # Calculate momentum
+        short_momentum = (very_recent[-1] - very_recent[0]) / very_recent[0]
+        medium_momentum = (recent_prices[-1] - recent_prices[-10]) / recent_prices[-10]
         
-        # More nuanced market conditions
-        if trend_strength > self.scalp_threshold:
-            if ema_short > ema_medium > ema_long:
+        # More responsive conditions
+        if short_momentum > self.scalp_threshold * 0.5:
+            if ema_fast > ema_medium > ema_slow:
                 return "STRONG_BULLISH"
             return "BULLISH"
-        elif trend_strength < -self.scalp_threshold:
-            if ema_short < ema_medium < ema_long:
+        elif short_momentum < -self.scalp_threshold * 0.5:
+            if ema_fast < ema_medium < ema_slow:
                 return "STRONG_BEARISH"
             return "BEARISH"
-        elif abs(trend_strength) < self.scalp_threshold * 0.3:
-            if self.calculate_volatility() > self.scalp_threshold:
-                return "VOLATILE_RANGE"
+        elif abs(short_momentum) < self.scalp_threshold * 0.2:
             return "RANGING"
         
         return "NEUTRAL"
@@ -473,11 +521,6 @@ class BitcoinTradingBot:
             logging.error("Could not fetch current price for status update")
             return
         
-        # Ensure we have valid values
-        if self.capital is None:
-            self.capital = self.initial_capital
-            logging.warning("Reset capital to initial value")
-        
         # Calculate current portfolio value and P/L
         portfolio_value = self.capital + (self.btc_holdings * current_price)
         total_pnl = portfolio_value - self.initial_capital
@@ -498,8 +541,7 @@ Market Condition: {self.analyze_market_condition()}
 
 PORTFOLIO SUMMARY
 ----------------
-Initial Capital: ${self.initial_capital:,.2f}
-Current Portfolio Value: ${portfolio_value:,.2f}
+Portfolio Value: ${portfolio_value:,.2f}
 Total P/L: ${total_pnl:,.2f} ({pnl_percentage:+.2f}%)
 Cash Balance: ${self.capital:,.2f}
 BTC Holdings: {self.btc_holdings:.8f} BTC (${(self.btc_holdings * current_price):,.2f})
@@ -526,6 +568,17 @@ Total Trades: {len(self.trade_history)}
                 status += f"{trade['action']}: {trade['amount']:.8f} BTC @ ${trade['price']:,.2f} "
                 status += f"({trade['reason']})\n"
         
+        # Add VaR information
+        var_95 = self.calculate_var(confidence_level=0.95)
+        var_99 = self.calculate_var(confidence_level=0.99)
+        
+        status += f"""
+RISK METRICS
+-----------
+95% Daily VaR: ${var_95:,.2f} ({(var_95/portfolio_value)*100:.2f}% of portfolio)
+99% Daily VaR: ${var_99:,.2f} ({(var_99/portfolio_value)*100:.2f}% of portfolio)
+"""
+        
         status += f"\n{'='*50}\n"
         
         # Log status and save to file
@@ -534,43 +587,25 @@ Total Trades: {len(self.trade_history)}
             f.write(status)
 
     def calculate_optimal_position_size(self, current_price: float, trend_strength: float) -> float:
-        """Calculate aggressive position sizes with meaningful minimums"""
+        """Calculate position size with volatility adjustment"""
         portfolio_value = self.capital + (self.btc_holdings * current_price)
         
-        # Base size starts at 50% of portfolio for strong signals
-        base_size = portfolio_value * 0.5
+        # Calculate volatility adjustment
+        volatility = self.calculate_volatility()
+        volatility_factor = max(0.3, min(1.0, self.max_volatility / volatility if volatility > 0 else 1.0))
         
-        # Aggressive trend multiplier (1.0 to 4.0)
-        trend_multiplier = min(4.0, max(1.0, 1 + abs(trend_strength) * 25))
+        # Base position size
+        base_size = portfolio_value * self.min_position_size * volatility_factor
         
-        # Calculate initial position size
+        # Adjust for trend strength
+        trend_multiplier = min(2.0, max(0.5, 1.0 + trend_strength * 50))
         position_size = base_size * trend_multiplier
         
-        # Minimum position size of $2,500 or 25% of portfolio, whichever is larger
-        min_position = max(2500, portfolio_value * 0.25)
+        # Ensure within limits
+        max_position = portfolio_value * self.max_position_size * volatility_factor
+        min_position = max(self.min_trade_size, portfolio_value * 0.1)  # At least 10% or min trade size
         
-        # Maximum position size of 90% of portfolio or available capital
-        max_position = min(
-            portfolio_value * 0.9,  # Up to 90% of portfolio
-            self.capital,           # Can't spend more than available
-            portfolio_value * 0.5 * trend_multiplier  # Scale with trend
-        )
-        
-        # Ensure position is between minimum and maximum
-        position_size = max(min_position, min(position_size, max_position))
-        
-        logging.info(f"""
-Position Size Calculation:
-  Portfolio Value: ${portfolio_value:,.2f}
-  Base Size: ${base_size:,.2f}
-  Trend Multiplier: {trend_multiplier:.2f}x
-  Initial Position: ${position_size:,.2f}
-  Min Position: ${min_position:,.2f}
-  Max Position: ${max_position:,.2f}
-  Final Position: ${position_size:,.2f}
-""")
-        
-        return position_size
+        return min(max_position, max(min_position, position_size))
 
     def calculate_position_fraction(self, market_condition: str, momentum: Dict, current_price: float) -> float:
         """More conservative position sizing"""
@@ -815,42 +850,37 @@ Position Size Calculation:
         return True
 
     def manage_position(self, position: Dict, current_price: float, market_condition: str):
-        """Enhanced position management with scaled exits"""
+        """Enhanced position management for crypto volatility"""
         entry_price = position['entry_price']
         current_pnl = (current_price - entry_price) / entry_price
         
-        # Dynamic trailing stop based on profit
-        if current_pnl > self.profit_target * 0.5:  # Activate earlier
+        # Calculate current volatility
+        volatility = self.calculate_volatility()
+        volatility_adjustment = min(1.0, self.max_volatility / volatility if volatility > 0 else 1.0)
+        
+        # Adjust thresholds based on volatility
+        adjusted_profit_target = self.profit_target * (1 + volatility_adjustment)
+        adjusted_stop_loss = self.stop_loss * (1 + volatility_adjustment)
+        
+        # Dynamic trailing stop
+        if current_pnl > adjusted_profit_target * 0.5:
             if not self.trailing_active:
                 self.trailing_active = True
                 self.trailing_price = current_price
             elif current_price > self.trailing_price:
                 self.trailing_price = current_price
-                # Tighten stop as profits increase
-                self.trailing_stop = max(
-                    0.0004,  # Minimum trailing stop
-                    self.trailing_stop * (1 - current_pnl)  # Tighten as profit grows
-                )
             elif current_price < self.trailing_price * (1 - self.trailing_stop):
                 return 'TRAILING_STOP'
         
-        # Scaled profit taking
-        if current_pnl >= self.profit_target * 2:
-            return 'TAKE_FULL_PROFIT'
-        elif current_pnl >= self.profit_target:
-            if market_condition in ["BEARISH", "STRONG_BEARISH"]:
-                return 'TAKE_FULL_PROFIT'
-            return 'TAKE_PARTIAL_PROFIT'
-        elif current_pnl >= self.profit_target * 0.7:
-            if market_condition in ["BEARISH", "STRONG_BEARISH", "VOLATILE_RANGE"]:
-                return 'TAKE_PARTIAL_PROFIT'
+        # Quick profit taking in volatile markets
+        if current_pnl >= adjusted_profit_target:
+            if volatility > self.max_volatility * 0.5:
+                return 'TAKE_PROFIT_VOLATILE'
+            return 'TAKE_PROFIT'
         
-        # Dynamic stop loss
-        if current_pnl <= self.stop_loss:
+        # Faster stop loss in high volatility
+        if current_pnl <= adjusted_stop_loss:
             return 'STOP_LOSS'
-        elif current_pnl < 0 and abs(current_pnl) > self.stop_loss * 0.7:
-            if market_condition in ["STRONG_BEARISH", "VOLATILE_RANGE"]:
-                return 'PREVENTIVE_STOP'
         
         return 'HOLD'
 
@@ -985,81 +1015,108 @@ Position Size Calculation:
         return 0.5  # Default fallback
 
     def save_bot_state(self):
-        """Save complete bot state with datetime handling"""
-        def datetime_handler(obj):
-            """Handle datetime serialization"""
-            if isinstance(obj, datetime):
-                return obj.isoformat()
-            if isinstance(obj, np.float32):
-                return float(obj)
-            raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
-        
-        # Convert position stack timestamps
-        position_stack = []
-        for pos in self.position_stack:
-            position = pos.copy()
-            if 'timestamp' in position:
-                position['timestamp'] = position['timestamp'].isoformat()
-            position_stack.append(position)
-        
-        state = {
-            'timestamp': datetime.now().isoformat(),
-            'portfolio': {
-                'initial_capital': self.initial_capital,
-                'current_capital': self.capital,
-                'btc_holdings': self.btc_holdings,
-                'position_stack': position_stack
-            },
-            'trading_parameters': {
-                'profit_target': float(self.profit_target),
-                'stop_loss': float(self.stop_loss),
-                'scalp_threshold': float(self.scalp_threshold),
-                'trailing_stop': float(self.trailing_stop)
-            },
-            'performance_metrics': {
-                'trade_success_rate': self.trade_success_rate,
-                'strategy_weights': {k: float(v) for k, v in self.strategy_weights.items()}
-            },
-            'learning_state': self.learning_data
-        }
-        
+        """Save complete bot state with all performance data"""
         try:
+            state = {
+                'timestamp': datetime.now().isoformat(),
+                'portfolio': {
+                    'initial_capital': self.initial_capital,
+                    'current_capital': self.capital,
+                    'btc_holdings': self.btc_holdings,
+                    'position_stack': [
+                        {**pos, 'timestamp': pos['timestamp'].isoformat()} 
+                        for pos in self.position_stack
+                    ]
+                },
+                'performance': {
+                    'trade_history': self.trade_history,
+                    'trade_success_rate': self.trade_success_rate,
+                    'market_trends': self.market_trends,
+                    'learning_data': self.learning_data
+                },
+                'trading_parameters': {
+                    'profit_target': float(self.profit_target),
+                    'stop_loss': float(self.stop_loss),
+                    'scalp_threshold': float(self.scalp_threshold),
+                    'trailing_stop': float(self.trailing_stop),
+                    'strategy_weights': {k: float(v) for k, v in self.strategy_weights.items()}
+                }
+            }
+            
+            # Save to both JSON files for redundancy
             with open('bot_state.json', 'w') as f:
-                json.dump(state, f, indent=4, default=datetime_handler)
-            logging.info("Bot state saved successfully")
+                json.dump(state, f, indent=4)
+            with open('learning_data.json', 'w') as f:
+                json.dump(state['performance']['learning_data'], f, indent=4)
+            
+            logging.info("Bot state and learning data saved successfully")
+            
         except Exception as e:
             logging.error(f"Error saving bot state: {str(e)}")
 
     def load_bot_state(self):
-        """Load complete bot state with datetime parsing"""
+        """Load complete bot state with all performance data"""
         try:
-            with open('bot_state.json', 'r') as f:
-                state = json.load(f)
-        
-            # Convert position stack timestamps back to datetime
-            for position in state['portfolio']['position_stack']:
-                if 'timestamp' in position:
+            # Try loading from bot_state.json first
+            try:
+                with open('bot_state.json', 'r') as f:
+                    state = json.load(f)
+                    
+                # Convert timestamps back to datetime
+                for position in state['portfolio']['position_stack']:
                     position['timestamp'] = datetime.fromisoformat(position['timestamp'])
-        
-            # Restore trading parameters
-            self.profit_target = float(state['trading_parameters']['profit_target'])
-            self.stop_loss = float(state['trading_parameters']['stop_loss'])
-            self.scalp_threshold = float(state['trading_parameters']['scalp_threshold'])
-            self.trailing_stop = float(state['trading_parameters']['trailing_stop'])
-        
-            # Restore performance metrics
-            self.trade_success_rate = state['performance_metrics']['trade_success_rate']
-            self.strategy_weights = {k: float(v) for k, v in state['performance_metrics']['strategy_weights'].items()}
-        
-            # Restore learning state
-            self.learning_data = state['learning_state']
-        
-            logging.info("Bot state loaded successfully")
-        
-        except FileNotFoundError:
-            logging.info("No previous state found, starting fresh")
+                    
+                # Restore portfolio state
+                self.initial_capital = state['portfolio']['initial_capital']
+                self.capital = state['portfolio']['current_capital']
+                self.btc_holdings = state['portfolio']['btc_holdings']
+                self.position_stack = state['portfolio']['position_stack']
+                
+                # Restore performance metrics
+                self.trade_history = state['performance']['trade_history']
+                self.trade_success_rate = state['performance']['trade_success_rate']
+                self.market_trends = state['performance']['market_trends']
+                self.learning_data = state['performance']['learning_data']
+                
+                # Restore trading parameters
+                self.profit_target = float(state['trading_parameters']['profit_target'])
+                self.stop_loss = float(state['trading_parameters']['stop_loss'])
+                self.scalp_threshold = float(state['trading_parameters']['scalp_threshold'])
+                self.trailing_stop = float(state['trading_parameters']['trailing_stop'])
+                self.strategy_weights = {k: float(v) for k, v in state['trading_parameters']['strategy_weights'].items()}
+                
+                logging.info("Bot state loaded successfully")
+                return
+                
+            except FileNotFoundError:
+                # Try loading just learning data as fallback
+                with open('learning_data.json', 'r') as f:
+                    self.learning_data = json.load(f)
+                    logging.info("Loaded learning data from backup file")
+                    return
+                    
         except Exception as e:
             logging.error(f"Error loading bot state: {str(e)}")
+        
+        # If all loading attempts fail, initialize fresh
+        logging.info("No existing state found, initializing fresh data")
+        self._initialize_fresh_state()
+
+    def _initialize_fresh_state(self):
+        """Initialize fresh learning data with baseline values"""
+        self.learning_data = {
+            'successful_patterns': [],
+            'failed_patterns': [],
+            'market_conditions': {
+                condition: {'total_trades': 0, 'successful_trades': 0, 'success_rate': 0.5}
+                for condition in ['STRONG_BULLISH', 'BULLISH', 'NEUTRAL', 'BEARISH', 
+                                'STRONG_BEARISH', 'VOLATILE_RANGE', 'RANGING']
+            },
+            'time_patterns': {
+                str(hour): {'total_trades': 0, 'successful_trades': 0, 'success_rate': 0.5}
+                for hour in range(24)
+            }
+        }
 
     def calculate_volatility(self) -> float:
         """Calculate price volatility over recent history"""
@@ -1115,25 +1172,86 @@ Position Size Calculation:
             f"\n  Success Rate: {stats['success_rate']:.2%}"
         )
 
+    def calculate_var(self, confidence_level: float = 0.95, time_horizon: int = 1) -> float:
+        """
+        Calculate Value at Risk using historical method
+        confidence_level: typically 0.95 or 0.99
+        time_horizon: number of days to calculate VaR for
+        """
+        if len(self.price_history) < 100:  # Need sufficient historical data
+            return 0.0
+        
+        # Calculate daily returns
+        prices = [price for price, _ in self.price_history]
+        returns = np.diff(prices) / prices[:-1]
+        
+        # Sort returns from worst to best
+        sorted_returns = np.sort(returns)
+        
+        # Find the return at the confidence level
+        index = int((1 - confidence_level) * len(sorted_returns))
+        var_return = sorted_returns[index]
+        
+        # Calculate current portfolio value
+        current_price = self.fetch_bitcoin_price()
+        if not current_price:
+            return 0.0
+        
+        portfolio_value = self.capital + (self.btc_holdings * current_price)
+        
+        # Calculate VaR in dollar terms
+        var_dollar = portfolio_value * abs(var_return) * np.sqrt(time_horizon)
+        
+        logging.info(f"""
+Value at Risk Analysis:
+  Confidence Level: {confidence_level*100}%
+  Time Horizon: {time_horizon} day(s)
+  Portfolio Value: ${portfolio_value:,.2f}
+  VaR: ${var_dollar:,.2f}
+  VaR %: {(var_dollar/portfolio_value)*100:.2f}%
+""")
+        
+        return var_dollar
+
+    def is_bull_market(self) -> bool:
+        """Detect bull market conditions"""
+        if len(self.price_history) < 100:  # Need sufficient history
+            return False
+        
+        prices = [price for price, _ in self.price_history[-100:]]
+        trend = (prices[-1] - prices[0]) / prices[0]
+        
+        # Check multiple timeframes
+        short_trend = (prices[-1] - prices[-20]) / prices[-20]  # 20-period
+        medium_trend = (prices[-1] - prices[-50]) / prices[-50]  # 50-period
+        
+        # Bull market conditions:
+        # 1. Overall uptrend > threshold
+        # 2. Short and medium trends positive
+        # 3. Short trend > medium trend (acceleration)
+        return (trend > self.bull_market_threshold and 
+                short_trend > 0 and medium_trend > 0 and 
+                short_trend > medium_trend)
+
 def main():
     """Main bot loop with enhanced monitoring"""
     bot = BitcoinTradingBot()
     
-    # Check price and execute trades more frequently
-    schedule.every(1).minutes.do(bot.display_status)
-    schedule.every(2).minutes.do(bot.execute_trade_decision)  # Check for trades every 2 minutes
-    schedule.every(1).hours.do(bot.cleanup_old_data)
-    # Add state saving
-    schedule.every(5).minutes.do(bot.save_bot_state)
-    
     logging.info("\n" + "="*50)
     logging.info("Trading Bot Started")
-    logging.info(f"Initial Capital: ${bot.initial_capital:,.2f}")
+    logging.info(f"Portfolio Value: ${bot.capital + (bot.btc_holdings * bot.fetch_bitcoin_price()):,.2f}")
     logging.info("="*50 + "\n")
     
-    # Show initial status and check for trades immediately
-    bot.display_status()
-    bot.execute_trade_decision()
+    # More frequent state saving
+    schedule.every(1).minutes.do(bot.display_status)
+    schedule.every(2).minutes.do(bot.execute_trade_decision)
+    schedule.every(3).minutes.do(bot.save_bot_state)  # Save state every 3 minutes
+    schedule.every(1).hours.do(bot.cleanup_old_data)
+    
+    # Initial actions
+    bot.display_status()  # Show initial status
+    bot.execute_trade_decision()  # Check for initial trades
+    bot.save_bot_state()  # Save initial state
     
     try:
         while True:

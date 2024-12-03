@@ -1,73 +1,42 @@
 {
-    "timestamp": "2024-12-03T13:28:51.303340",
+    "timestamp": "2024-12-03T14:30:55.725489",
     "portfolio": {
         "initial_capital": 10000.0,
-        "current_capital": 8262.894279742386,
-        "btc_holdings": 0.01844086145538657,
-        "position_stack": [
-            {
-                "amount": 0.0,
-                "entry_price": 95698.12692307692,
-                "timestamp": "2024-12-03T12:28:52.435889",
-                "active": false
-            },
-            {
-                "amount": 0.0,
-                "entry_price": 95662.91923076924,
-                "timestamp": "2024-12-03T12:30:54.879470",
-                "active": false
-            },
-            {
-                "amount": 0.0,
-                "entry_price": 95805.5423076923,
-                "timestamp": "2024-12-03T12:53:39.491838",
-                "active": false
-            },
-            {
-                "amount": 0.0,
-                "entry_price": 95967.7,
-                "timestamp": "2024-12-03T13:16:24.604208",
-                "active": false
-            },
-            {
-                "amount": 0.0,
-                "entry_price": 95967.7,
-                "timestamp": "2024-12-03T13:16:24.604226",
-                "active": false
-            },
-            {
-                "amount": 0.0,
-                "entry_price": 96025.80384615384,
-                "timestamp": "2024-12-03T13:20:28.903056",
-                "active": false
-            }
-        ]
+        "current_capital": 0,
+        "btc_holdings": 0.1045935053869678,
+        "position_stack": []
+    },
+    "performance": {
+        "trade_history": [],
+        "trade_success_rate": {
+            "total_trades": 0,
+            "profitable_trades": 0,
+            "success_rate": 0.0
+        },
+        "market_trends": {
+            "up_trends": [],
+            "down_trends": [],
+            "failed_trades": []
+        },
+        "learning_data": {
+            "successful_patterns": [],
+            "failed_patterns": [],
+            "market_conditions": {},
+            "time_patterns": {},
+            "position_sizes": {},
+            "holding_periods": {}
+        }
     },
     "trading_parameters": {
-        "profit_target": 0.002,
-        "stop_loss": -0.0015,
-        "scalp_threshold": 0.0005,
-        "trailing_stop": 0.0008
-    },
-    "performance_metrics": {
-        "trade_success_rate": {
-            "total_trades": 8,
-            "profitable_trades": 5,
-            "success_rate": 0.625
-        },
+        "profit_target": 0.005,
+        "stop_loss": -0.003,
+        "scalp_threshold": 0.0015,
+        "trailing_stop": 0.002,
         "strategy_weights": {
             "momentum": 1.0,
             "trend": 1.0,
             "volatility": 1.0,
             "time_of_day": 1.0
         }
-    },
-    "learning_state": {
-        "successful_patterns": [],
-        "failed_patterns": [],
-        "market_conditions": {},
-        "time_patterns": {},
-        "position_sizes": {},
-        "holding_periods": {}
     }
 }
