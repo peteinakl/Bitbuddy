@@ -1,9 +1,9 @@
 {
-    "timestamp": "2024-12-03T13:18:50.841104",
+    "timestamp": "2024-12-03T13:28:51.303340",
     "portfolio": {
         "initial_capital": 10000.0,
-        "current_capital": 2070.4165638147424,
-        "btc_holdings": 0.08305964152562068,
+        "current_capital": 8262.894279742386,
+        "btc_holdings": 0.01844086145538657,
         "position_stack": [
             {
                 "amount": 0.0,
@@ -24,15 +24,22 @@
                 "active": false
             },
             {
-                "amount": 0.03876772494616887,
+                "amount": 0.0,
                 "entry_price": 95967.7,
-                "timestamp": "2024-12-03T13:16:24.604208"
+                "timestamp": "2024-12-03T13:16:24.604208",
+                "active": false
             },
             {
-                "amount": 0.03876772494616887,
+                "amount": 0.0,
                 "entry_price": 95967.7,
                 "timestamp": "2024-12-03T13:16:24.604226",
-                "active": true
+                "active": false
+            },
+            {
+                "amount": 0.0,
+                "entry_price": 96025.80384615384,
+                "timestamp": "2024-12-03T13:20:28.903056",
+                "active": false
             }
         ]
     },
@@ -44,9 +51,9 @@
     },
     "performance_metrics": {
         "trade_success_rate": {
-            "total_trades": 5,
+            "total_trades": 8,
             "profitable_trades": 5,
-            "success_rate": 1.0
+            "success_rate": 0.625
         },
         "strategy_weights": {
             "momentum": 1.0,

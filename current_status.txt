@@ -2,40 +2,40 @@
 ==================================================
 BITCOIN TRADING BOT - STATUS UPDATE
 ==================================================
-Time: 2024-12-03 13:21:35
+Time: 2024-12-03 13:29:52
 
 CURRENT MARKET
 -------------
-Bitcoin Price: $96,012.00
-24h Change: -0.01%
-Market Condition: NEUTRAL
+Bitcoin Price: $95,786.77
+24h Change: -0.04%
+Market Condition: STRONG_BEARISH
 
 PORTFOLIO SUMMARY
 ----------------
 Initial Capital: $10,000.00
-Current Portfolio Value: $10,045.14
-Total P/L: $45.14 (+0.45%)
-Cash Balance: $2,070.42
-BTC Holdings: 0.08305964 BTC ($7,974.72)
+Current Portfolio Value: $10,029.28
+Total P/L: $29.28 (+0.29%)
+Cash Balance: $8,262.89
+BTC Holdings: 0.01844086 BTC ($1,766.39)
 
 TRADING ACTIVITY
 ---------------
-Active Positions: 3
-Total Trades: 5
+Active Positions: 0
+Total Trades: 8
 
 ACTIVE POSITIONS
 ----------------
-Position 1: 0.00000000 BTC @ $95,698.13 (P/L: +0.33%)
-Position 2: 0.00000000 BTC @ $95,662.92 (P/L: +0.36%)
-Position 3: 0.00000000 BTC @ $95,805.54 (P/L: +0.22%)
-Position 4: 0.03876772 BTC @ $95,967.70 (P/L: +0.05%)
-Position 5: 0.03876772 BTC @ $95,967.70 (P/L: +0.05%)
-Position 6: 0.02585106 BTC @ $96,025.80 (P/L: -0.01%)
+Position 1: 0.00000000 BTC @ $95,698.13 (P/L: +0.09%)
+Position 2: 0.00000000 BTC @ $95,662.92 (P/L: +0.13%)
+Position 3: 0.00000000 BTC @ $95,805.54 (P/L: -0.02%)
+Position 4: 0.00000000 BTC @ $95,967.70 (P/L: -0.19%)
+Position 5: 0.00000000 BTC @ $95,967.70 (P/L: -0.19%)
+Position 6: 0.00000000 BTC @ $96,025.80 (P/L: -0.25%)
 
 RECENT TRADES
 -------------
-SELL: 0.00085026 BTC @ $95,967.70 (PROFIT_TARGET)
-SELL: 0.00002571 BTC @ $96,010.51 (PROFIT_TARGET)
-SELL: 0.02036721 BTC @ $96,010.51 (PROFIT_TARGET)
+SELL: 0.02585106 BTC @ $95,860.54 (STOP_LOSS)
+SELL: 0.03876772 BTC @ $95,811.18 (STOP_LOSS)
+SELL: 0.03876772 BTC @ $95,811.18 (STOP_LOSS)
 
 ==================================================
