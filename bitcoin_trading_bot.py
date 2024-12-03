@@ -512,74 +512,81 @@ class BitcoinTradingBot:
 
     def execute_trade(self, action: str, amount: float, price: float, reason: str = ""):
         """Execute a trade and update portfolio with proper tracking"""
-        # Pre-trade validation
-        if action == "BUY":
-            cost = amount * price
-            if cost > self.capital:
-                logging.warning(f"Insufficient funds for BUY: Need ${cost:,.2f}, have ${self.capital:,.2f}")
-                return False
-            if cost < 10:  # Minimum trade size
-                logging.warning(f"Trade size too small: ${cost:,.2f} < $10.00")
-                return False
-        elif action == "SELL":
-            if amount > self.btc_holdings:
-                logging.warning(f"Insufficient BTC for SELL: Need {amount:.8f} BTC, have {self.btc_holdings:.8f} BTC")
-                return False
-            if amount * price < 10:  # Minimum trade size
-                logging.warning(f"Trade size too small: ${amount * price:,.2f} < $10.00")
-                return False
+        try:
+            # Pre-trade validation
+            if action == "BUY":
+                cost = amount * price
+                if cost > self.capital:
+                    logging.warning(f"Insufficient funds for BUY: Need ${cost:,.2f}, have ${self.capital:,.2f}")
+                    return False
+                if cost < 10:  # Minimum trade size
+                    logging.warning(f"Trade size too small: ${cost:,.2f} < $10.00")
+                    return False
+            elif action == "SELL":
+                if amount > self.btc_holdings:
+                    logging.warning(f"Insufficient BTC for SELL: Need {amount:.8f} BTC, have {self.btc_holdings:.8f} BTC")
+                    return False
+                if amount * price < 10:  # Minimum trade size
+                    logging.warning(f"Trade size too small: ${amount * price:,.2f} < $10.00")
+                    return False
 
-        # Record pre-trade state
-        trade_result = {
-            'action': action,
-            'amount': amount,
-            'price': price,
-            'timestamp': datetime.now().isoformat(),
-            'portfolio_value_before': self.capital + (self.btc_holdings * price),
-            'reason': reason
-        }
-
-        # Execute trade
-        if action == "BUY":
-            self.btc_holdings += amount
-            self.capital -= cost
-            self.position_stack.append({
+            # Record pre-trade state
+            trade_result = {
+                'action': action,
                 'amount': amount,
-                'entry_price': price,
-                'timestamp': datetime.now(),
-                'active': True,
-                'type': 'ENTRY',
+                'price': price,
+                'timestamp': datetime.now().isoformat(),
+                'portfolio_value_before': self.capital + (self.btc_holdings * price),
                 'reason': reason
+            }
+
+            # Execute trade
+            if action == "BUY":
+                self.btc_holdings += amount
+                self.capital -= cost
+                self.position_stack.append({
+                    'amount': amount,
+                    'entry_price': price,
+                    'timestamp': datetime.now(),
+                    'active': True,
+                    'type': 'ENTRY',
+                    'reason': reason
+                })
+                logging.info(f"BUY: {amount:.8f} BTC at ${price:,.2f} ({reason})")
+            elif action == "SELL":
+                revenue = amount * price
+                self.btc_holdings -= amount
+                self.capital += revenue
+                logging.info(f"SELL: {amount:.8f} BTC at ${price:,.2f} ({reason})")
+
+            # Record post-trade state
+            trade_result['portfolio_value_after'] = self.capital + (self.btc_holdings * price)
+            trade_result['pnl'] = trade_result['portfolio_value_after'] - trade_result['portfolio_value_before']
+            trade_result['pnl_percentage'] = (trade_result['pnl'] / trade_result['portfolio_value_before']) * 100
+
+            # Update trade history
+            self.trade_history.append(trade_result)
+            
+            # Store threshold data with trade
+            trade_result.update({
+                'momentum_threshold': self.momentum_thresholds['strong'],
+                'position_size': amount * price / (self.capital + (self.btc_holdings * price)),
+                'market_volatility': self.calculate_volatility(),
+                'market_condition': self.analyze_market_condition()
             })
-            logging.info(f"BUY: {amount:.8f} BTC at ${price:,.2f} ({reason})")
-        elif action == "SELL":
-            revenue = amount * price
-            self.btc_holdings -= amount
-            self.capital += revenue
-            logging.info(f"SELL: {amount:.8f} BTC at ${price:,.2f} ({reason})")
+            
+            # Save state and history in one operation
+            self.save_bot_state()  # This will handle both state and trade history
+            
+            # Update adaptive thresholds periodically
+            if len(self.trade_history) % self.adaptation_config['update_frequency'] == 0:
+                self.update_adaptive_thresholds()
 
-        # Record post-trade state
-        trade_result['portfolio_value_after'] = self.capital + (self.btc_holdings * price)
-        trade_result['pnl'] = trade_result['portfolio_value_after'] - trade_result['portfolio_value_before']
-        trade_result['pnl_percentage'] = (trade_result['pnl'] / trade_result['portfolio_value_before']) * 100
-
-        # Update trade history
-        self.trade_history.append(trade_result)
-        self.save_trade_history()
-
-        # Store threshold data with trade
-        trade_result.update({
-            'momentum_threshold': self.momentum_thresholds['strong'],
-            'position_size': amount * price / (self.capital + (self.btc_holdings * price)),
-            'market_volatility': self.calculate_volatility(),
-            'market_condition': self.analyze_market_condition()
-        })
-        
-        # Update adaptive thresholds periodically
-        if len(self.trade_history) % self.adaptation_config['update_frequency'] == 0:
-            self.update_adaptive_thresholds()
-
-        return True
+            return True
+            
+        except Exception as e:
+            logging.error(f"Error executing trade: {str(e)}")
+            return False
 
     def log_market_data(self, data: Dict):
         """Log market data to CSV file"""
@@ -1120,13 +1127,6 @@ Trade Decision Analysis:
     def save_bot_state(self):
         """Save complete bot state with all performance data"""
         try:
-            # Helper function to convert datetime objects
-            def datetime_handler(obj):
-                if isinstance(obj, datetime):
-                    return obj.isoformat()
-                raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
-            
-            # Prepare state data with datetime serialization
             state = {
                 'timestamp': datetime.now().isoformat(),
                 'portfolio': {
@@ -1142,7 +1142,7 @@ Trade Decision Analysis:
                     ]
                 },
                 'performance': {
-                    'trade_history': self.trade_history,  # Already has ISO format timestamps
+                    'trade_history': self.trade_history,
                     'trade_success_rate': self.trade_success_rate,
                     'market_trends': self.market_trends,
                     'learning_data': self.learning_data
@@ -1169,15 +1169,22 @@ Trade Decision Analysis:
                     }
                 }
             }
-            
-            # Save both files
-            with open('bot_state.json', 'w') as f:
-                json.dump(state, f, indent=4, default=datetime_handler)
-            with open('learning_data.json', 'w') as f:
-                json.dump(state['performance']['learning_data'], f, indent=4, default=datetime_handler)
-            
-            logging.info("Bot state and learning data saved successfully")
-            
+
+            # Save all data in a single operation
+            success = True
+            try:
+                with open('bot_state.json', 'w') as f:
+                    json.dump(state, f, indent=4, default=lambda x: x.isoformat() if isinstance(x, datetime) else None)
+                with open('trade_history.json', 'w') as f:
+                    json.dump(self.trade_history, f, indent=4)
+            except Exception as e:
+                success = False
+                raise e
+
+            # Log only once, after all saves are complete
+            if success:
+                logging.info("Bot state and history saved successfully")
+
         except Exception as e:
             logging.error(f"Error saving bot state: {str(e)}")
             logging.error(traceback.format_exc())
