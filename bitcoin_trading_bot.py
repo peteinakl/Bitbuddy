@@ -621,12 +621,15 @@ class BitcoinTradingBot:
             logging.error("Could not fetch current price for status update")
             return
         
-        # Calculate current portfolio value and P/L
+        # Calculate portfolio metrics
         portfolio_value = self.capital + (self.btc_holdings * current_price)
         total_pnl = portfolio_value - self.initial_capital
         pnl_percentage = (total_pnl / self.initial_capital) * 100
         
-        # Format status message
+        # Calculate active positions and trades
+        active_positions = len([p for p in self.position_stack if p.get('active', True)])
+        total_trades = len([t for t in self.trade_history if t['action'] != 'INITIAL_POSITION'])
+        
         status = f"""
 {'='*50}
 BITCOIN TRADING BOT - STATUS UPDATE
@@ -648,8 +651,8 @@ BTC Holdings: {self.btc_holdings:.8f} BTC (${(self.btc_holdings * current_price)
 
 TRADING ACTIVITY
 ---------------
-Active Positions: {len([p for p in self.position_stack if p.get('active', True)])}
-Total Trades: {len(self.trade_history)}
+Active Positions: {active_positions}
+Total Trades: {total_trades}
 """
         
         # Add position details if any exist
