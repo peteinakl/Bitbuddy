@@ -2,20 +2,20 @@
 ==================================================
 BITCOIN TRADING BOT - STATUS UPDATE
 ==================================================
-Time: 2024-12-05 10:02:49
+Time: 2024-12-05 10:06:56
 
 CURRENT MARKET
 -------------
-Bitcoin Price: $98,841.53
-24h Change: 0.01%
+Bitcoin Price: $98,919.98
+24h Change: -0.00%
 Market Condition: NEUTRAL
 
 PORTFOLIO SUMMARY
 ----------------
-Portfolio Value: $10,357.41
-Total P/L: $357.41 (+3.57%)
+Portfolio Value: $10,365.63
+Total P/L: $365.63 (+3.66%)
 Cash Balance: $0.00
-BTC Holdings: 0.10478806 BTC ($10,357.41)
+BTC Holdings: 0.10478806 BTC ($10,365.63)
 
 TRADING ACTIVITY
 ---------------
