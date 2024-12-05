@@ -1,13 +1,146 @@
 {
-    "timestamp": "2024-12-05T10:06:51.535064",
+    "timestamp": "2024-12-05T16:34:13.028079",
     "portfolio": {
         "initial_capital": 10000.0,
-        "current_capital": 0,
-        "btc_holdings": 0.1047880564830194,
+        "current_capital": 9687.181227559598,
+        "btc_holdings": 0.0035688433170169478,
         "position_stack": []
     },
     "performance": {
-        "trade_history": [],
+        "trade_history": [
+            {
+                "action": "SELL",
+                "amount": 0.0507568827309077,
+                "price": 98426.27307692307,
+                "timestamp": "2024-12-05T15:12:23.482900",
+                "portfolio_value_before": 9991.621600411363,
+                "reason": "STRONG_BEARISH_PROTECTION",
+                "trade_number": 1,
+                "market_condition": "STRONG_BEARISH",
+                "momentum_data": {
+                    "strength": 0.00083936947955898,
+                    "direction": "down",
+                    "volatility": 0.0002663763576949084
+                },
+                "portfolio_state": {
+                    "btc_holdings": 0.1015137654618154,
+                    "cash_balance": 0
+                },
+                "portfolio_value_after": 9991.621600411363,
+                "pnl": 0.0,
+                "pnl_percentage": 0.0
+            },
+            {
+                "action": "SELL",
+                "amount": 0.012689220682726925,
+                "price": 98407.07692307692,
+                "timestamp": "2024-12-05T15:14:25.112179",
+                "portfolio_value_before": 9990.647263481711,
+                "reason": "BEARISH_PROTECTION",
+                "trade_number": 2,
+                "market_condition": "BEARISH",
+                "momentum_data": {
+                    "strength": 0.000521636251185766,
+                    "direction": "down",
+                    "volatility": 0.00016209390065286523
+                },
+                "portfolio_state": {
+                    "btc_holdings": 0.0507568827309077,
+                    "cash_balance": 4995.8108002056815
+                },
+                "portfolio_value_after": 9990.64726348171,
+                "pnl": -1.8189894035458565e-12,
+                "pnl_percentage": -1.8206922490344678e-14
+            },
+            {
+                "action": "SELL",
+                "amount": 0.019033831024090387,
+                "price": 98633.31538461537,
+                "timestamp": "2024-12-05T15:20:31.076817",
+                "portfolio_value_before": 9999.259632777856,
+                "reason": "STRONG_BEARISH_PROTECTION",
+                "trade_number": 3,
+                "market_condition": "STRONG_BEARISH",
+                "momentum_data": {
+                    "strength": 0.00021711036928390363,
+                    "direction": "down",
+                    "volatility": 6.621122248895156e-05
+                },
+                "portfolio_state": {
+                    "btc_holdings": 0.038067662048180774,
+                    "cash_balance": 6244.519916024688
+                },
+                "portfolio_value_after": 9999.259632777856,
+                "pnl": 0.0,
+                "pnl_percentage": 0.0
+            },
+            {
+                "action": "SELL",
+                "amount": 0.009516915512045193,
+                "price": 101160.38461538461,
+                "timestamp": "2024-12-05T15:49:16.360402",
+                "portfolio_value_before": 10047.359441502496,
+                "reason": "STRONG_BEARISH_PROTECTION",
+                "trade_number": 4,
+                "market_condition": "STRONG_BEARISH",
+                "momentum_data": {
+                    "strength": 0.0019284639155504053,
+                    "direction": "down",
+                    "volatility": 0.0003495819874775548
+                },
+                "portfolio_state": {
+                    "btc_holdings": 0.019033831024090387,
+                    "cash_balance": 8121.889774401272
+                },
+                "portfolio_value_after": 10047.359441502496,
+                "pnl": 0.0,
+                "pnl_percentage": 0.0
+            },
+            {
+                "action": "SELL",
+                "amount": 0.004758457756022597,
+                "price": 100807.87307692308,
+                "timestamp": "2024-12-05T15:53:25.661892",
+                "portfolio_value_before": 10044.004618973937,
+                "reason": "STRONG_BEARISH_PROTECTION",
+                "trade_number": 5,
+                "market_condition": "STRONG_BEARISH",
+                "momentum_data": {
+                    "strength": 0.0002856532868756786,
+                    "direction": "down",
+                    "volatility": 0.000140516519219569
+                },
+                "portfolio_state": {
+                    "btc_holdings": 0.009516915512045193,
+                    "cash_balance": 9084.624607951884
+                },
+                "portfolio_value_after": 10044.004618973935,
+                "pnl": -1.8189894035458565e-12,
+                "pnl_percentage": -1.811020078694148e-14
+            },
+            {
+                "action": "SELL",
+                "amount": 0.0011896144390056492,
+                "price": 103282.71923076923,
+                "timestamp": "2024-12-05T16:09:39.080703",
+                "portfolio_value_before": 10055.781069849667,
+                "reason": "BEARISH_PROTECTION",
+                "trade_number": 6,
+                "market_condition": "BEARISH",
+                "momentum_data": {
+                    "strength": 4.355922958535158e-05,
+                    "direction": "down",
+                    "volatility": 0.00042170929727712315
+                },
+                "portfolio_state": {
+                    "btc_holdings": 0.004758457756022597,
+                    "cash_balance": 9564.31461346291
+                },
+                "portfolio_value_after": 10055.781069849667,
+                "pnl": 0.0,
+                "pnl_percentage": 0.0
+            }
+        ],
         "trade_success_rate": {
             "total_trades": 0,
             "profitable_trades": 0,
@@ -51,8 +184,35 @@
             }
         },
         "learning_data": {
+            "patterns": {
+                "TREND_REVERSAL": {
+                    "success_count": 0,
+                    "fail_count": 0,
+                    "confidence": 0.5,
+                    "optimal_entries": [],
+                    "avg_profit": 0.0,
+                    "best_conditions": []
+                },
+                "BREAKOUT": {
+                    "success_count": 0,
+                    "fail_count": 0,
+                    "confidence": 0.5,
+                    "optimal_entries": [],
+                    "avg_profit": 0.0,
+                    "best_conditions": []
+                },
+                "RANGE_BOUND": {
+                    "success_count": 0,
+                    "fail_count": 0,
+                    "confidence": 0.5,
+                    "optimal_entries": [],
+                    "avg_profit": 0.0,
+                    "best_conditions": []
+                }
+            },
             "successful_patterns": [],
             "failed_patterns": [],
+            "missed_opportunities": [],
             "market_conditions": {},
             "time_patterns": {},
             "position_sizes": {},
@@ -60,10 +220,10 @@
         }
     },
     "trading_parameters": {
-        "profit_target": 0.004,
-        "stop_loss": -0.003,
-        "scalp_threshold": 0.0005,
-        "trailing_stop": 0.002,
+        "profit_target": 0.003,
+        "stop_loss": -0.002,
+        "scalp_threshold": 0.0002,
+        "trailing_stop": 0.001,
         "strategy_weights": {
             "momentum": 1.0,
             "trend": 1.0,

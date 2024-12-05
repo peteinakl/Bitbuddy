@@ -2,29 +2,36 @@
 ==================================================
 BITCOIN TRADING BOT - STATUS UPDATE
 ==================================================
-Time: 2024-12-05 10:06:56
+Time: 2024-12-05 16:34:46
 
 CURRENT MARKET
 -------------
-Bitcoin Price: $98,919.98
-24h Change: -0.00%
-Market Condition: NEUTRAL
+Bitcoin Price: $102,690.80
+24h Change: -0.10%
+Market Condition: RANGING
 
 PORTFOLIO SUMMARY
 ----------------
-Portfolio Value: $10,365.63
-Total P/L: $365.63 (+3.66%)
-Cash Balance: $0.00
-BTC Holdings: 0.10478806 BTC ($10,365.63)
+Portfolio Value: $10,053.67
+Total P/L: $53.67 (+0.54%)
+Cash Balance: $9,687.18
+BTC Holdings: 0.00356884 BTC ($366.49)
 
 TRADING ACTIVITY
 ---------------
 Active Positions: 0
-Total Trades: 0
+Total Trades: 6
+Success Rate: 0.00%
+
+RECENT TRADES
+-------------
+SELL: 0.00951692 BTC @ $101,160.38 (STRONG_BEARISH_PROTECTION)
+SELL: 0.00475846 BTC @ $100,807.87 (STRONG_BEARISH_PROTECTION)
+SELL: 0.00118961 BTC @ $103,282.72 (BEARISH_PROTECTION)
 
 RISK METRICS
 -----------
-95% Daily VaR: $0.00 (0.00% of portfolio)
-99% Daily VaR: $0.00 (0.00% of portfolio)
+95% Daily VaR: $4.98 (0.05% of portfolio)
+99% Daily VaR: $22.38 (0.22% of portfolio)
 
 ==================================================
