@@ -3,12 +3,11 @@ import time
 import json
 import logging
 import schedule
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
 from typing import Dict, List, Tuple, Optional
 import numpy as np
 import pandas as pd
-from datetime import timedelta
 import traceback
 
 # Configure logging
@@ -22,8 +21,27 @@ logging.basicConfig(
 )
 
 class BitcoinTradingBot:
+    """Bitcoin trading bot with advanced portfolio management and market analysis.
+    
+    Manages cryptocurrency trading with features including:
+    - Portfolio management
+    - Market analysis
+    - Risk management
+    - Performance tracking
+    """
+    
+    # Class constants
+    MAX_PRICE_HISTORY = 720  # 1 hour of 5-sec data
+    MIN_API_INTERVAL = 10  # seconds
+    MIN_TRADE_SIZE = 100  # USD
+    DEFAULT_INITIAL_CAPITAL = 10000.0
+    
     def __init__(self, initial_capital: float = None):
-        """Initialize the trading bot with optional initial capital"""
+        """Initialize the trading bot with optional initial capital.
+        
+        Args:
+            initial_capital: Optional starting capital in USD
+        """
         # Initialize price history first
         self.price_history = []
         self.max_price_history = 720  # 1 hour of 5-sec data
@@ -295,50 +313,66 @@ class BitcoinTradingBot:
         self.performance_logger.addHandler(performance_handler)
 
     def load_existing_portfolio(self):
-        """Initialize portfolio maintaining current balance"""
+        """Initialize portfolio with balanced allocation"""
         try:
-            # Try to load existing trade history first
-            try:
-                with open('trade_history.json', 'r') as f:
-                    self.trade_history = json.load(f)
-            except (FileNotFoundError, json.JSONDecodeError):
-                # Initialize empty trade history if file doesn't exist or is empty
-                self.trade_history = []
-                logging.info("Initialized new trade history")
-            
-            # Try to load existing state
+            # Try to load existing state first
             with open('bot_state.json', 'r') as f:
                 state = json.load(f)
                 self.initial_capital = state['portfolio']['initial_capital']
-                current_capital = state['portfolio']['current_capital']
-                btc_holdings = state['portfolio']['btc_holdings']
+                self.capital = state['portfolio']['current_capital']
+                self.btc_holdings = state['portfolio']['btc_holdings']
                 
-                # Get current price to calculate current portfolio value
+                # Log portfolio restoration
                 current_price = self.fetch_bitcoin_price()
                 if current_price:
-                    self.btc_holdings = btc_holdings
-                    self.capital = current_capital
-                    
-                    # Add initial position to trade history if empty
-                    if not self.trade_history:
-                        self.trade_history.append({
-                            'action': 'INITIAL_POSITION',
-                            'amount': self.btc_holdings,
-                            'price': current_price,
-                            'timestamp': datetime.now().isoformat(),
-                            'reason': 'PORTFOLIO_INITIALIZATION',
-                            'portfolio_value': self.capital + (self.btc_holdings * current_price)
-                        })
-                        self.save_trade_history()
-                    
-                    # Log portfolio restoration
                     portfolio_value = self.capital + (self.btc_holdings * current_price)
                     logging.info(f"Restored existing portfolio:")
                     logging.info(f"BTC Holdings: {self.btc_holdings:.8f} BTC (${self.btc_holdings * current_price:,.2f})")
                     logging.info(f"Cash Balance: ${self.capital:.2f}")
                     logging.info(f"Total Portfolio Value: ${portfolio_value:,.2f}")
-                    return
-                    
+                return
+                
+        except (FileNotFoundError, KeyError, json.JSONDecodeError) as e:
+            logging.warning(f"Could not load existing portfolio: {str(e)}")
+            
+            # Initialize new portfolio with 50/50 split
+            self.initial_capital = 10000.0
+            current_price = self.fetch_bitcoin_price()
+            
+            if not current_price:
+                logging.error("Could not fetch price to initialize portfolio")
+                return
+            
+            # Start with 50/50 balanced position
+            self.btc_holdings = (self.initial_capital * 0.5) / current_price  # 50% in BTC
+            self.capital = self.initial_capital * 0.5  # 50% in cash
+            
+            # Initialize position stack with the initial BTC position
+            initial_position = {
+                'amount': self.btc_holdings,
+                'entry_price': current_price,
+                'timestamp': datetime.now(),
+                'active': True,
+                'type': 'INITIAL'
+            }
+            
+            self.position_stack = [initial_position]
+            
+            # Initialize trade history
+            self.trade_history = [{
+                'action': 'INITIAL_POSITION',
+                'amount': self.btc_holdings,
+                'price': current_price,
+                'timestamp': datetime.now().isoformat(),
+                'reason': 'PORTFOLIO_INITIALIZATION',
+                'active': True
+            }]
+            
+            logging.info(f"Initialized new portfolio with 50/50 balance:")
+            logging.info(f"BTC Holdings: {self.btc_holdings:.8f} BTC (${self.btc_holdings * current_price:,.2f})")
+            logging.info(f"Entry Price: ${current_price:,.2f}")
+            logging.info(f"Cash Balance: ${self.capital:.2f}")
+        
         except (FileNotFoundError, KeyError, json.JSONDecodeError) as e:
             logging.warning(f"Could not load existing portfolio: {str(e)}")
         
@@ -381,93 +415,72 @@ class BitcoinTradingBot:
         logging.info(f"Cash Balance: ${self.capital:.2f}")
 
     def fetch_bitcoin_price(self) -> Optional[float]:
-        """Fetch price using multiple APIs with price validation"""
+        """Fetch price using multiple APIs with better error handling"""
+        max_retries = 3
+        retry_delay = 2  # seconds
+        
         apis = {
             'Binance': {
                 "url": "https://api.binance.com/api/v3/ticker/price",
                 "params": {"symbol": "BTCUSDT"},
-                "extract": lambda r: float(r["price"]),
-                "weight": 1.0  # Primary source
+                "extract": lambda r: float(r["price"])
             },
             'Kraken': {
                 "url": "https://api.kraken.com/0/public/Ticker",
                 "params": {"pair": "XBTUSD"},
-                "extract": lambda r: float(r["result"]["XXBTZUSD"]["c"][0]),
-                "weight": 0.8  # Secondary source
+                "extract": lambda r: float(r["result"]["XXBTZUSD"]["c"][0])
             },
             'Bitstamp': {
                 "url": "https://www.bitstamp.net/api/v2/ticker/btcusd/",
                 "params": {},
-                "extract": lambda r: float(r["last"]),
-                "weight": 0.8  # Secondary source
+                "extract": lambda r: float(r["last"])
             }
         }
         
-        current_time = datetime.now()
-        prices = []
-        weights = []
-        
-        # Try to get prices from all APIs
-        for api_name, api in apis.items():
-            api_status = self.api_rotation[api_name]
+        for attempt in range(max_retries):
+            prices = []
+            errors = []
             
-            # Skip if in cooldown
-            if api_status['cooldown_until'] and current_time < api_status['cooldown_until']:
-                continue
+            for api_name, api in apis.items():
+                try:
+                    response = requests.get(
+                        api["url"], 
+                        params=api["params"], 
+                        timeout=10,
+                        headers={'User-Agent': 'Mozilla/5.0'}
+                    )
+                    if response.status_code == 200:
+                        price = api["extract"](response.json())
+                        if 10000 <= price <= 200000:  # Sanity check
+                            prices.append(price)
+                            logging.debug(f"Price from {api_name}: ${price:,.2f}")
+                except Exception as e:
+                    errors.append(f"{api_name}: {str(e)}")
+                    continue
             
-            try:
-                response = requests.get(api["url"], params=api["params"], timeout=5)
-                response.raise_for_status()
-                price = api["extract"](response.json())
-                
-                # Basic sanity check for price
-                if 10000 <= price <= 200000:  # Reasonable BTC price range
-                    prices.append(price)
-                    weights.append(api["weight"])
-                    
-                    # Update API tracking
-                    api_status['calls'].append(current_time)
-                    api_status['errors'] = 0
-                    logging.debug(f"Price from {api_name}: ${price:,.2f}")
-                else:
-                    logging.warning(f"Suspicious price from {api_name}: ${price:,.2f}")
-                    
-            except Exception as e:
-                logging.warning(f"Failed to fetch from {api_name}: {str(e)}")
-                api_status['errors'] += 1
-                
-                if api_status['errors'] >= 3:
-                    api_status['cooldown_until'] = current_time + timedelta(seconds=api_status['cooldown_period'])
-        
-        if not prices:
-            logging.error("Could not fetch valid price from any API")
-            return None
-        
-        if len(prices) == 1:
-            final_price = prices[0]
-        else:
-            # Calculate weighted average, excluding outliers
-            mean_price = sum(p * w for p, w in zip(prices, weights)) / sum(weights)
+            if prices:
+                # Calculate average price
+                avg_price = sum(prices) / len(prices)
+                # Calculate spread
+                if len(prices) > 1:
+                    spread = (max(prices) - min(prices)) / avg_price * 100
+                    logging.info(f"Price spread: {spread:.3f}% across {len(prices)} sources")
+                return avg_price
             
-            # Filter out prices that deviate more than 0.5% from mean
-            valid_prices = [(p, w) for p, w in zip(prices, weights) 
-                           if abs(p - mean_price) / mean_price <= 0.005]
-            
-            if valid_prices:
-                final_price = sum(p * w for p, w in valid_prices) / sum(w for _, w in valid_prices)
-            else:
-                final_price = mean_price
+            if attempt < max_retries - 1:
+                logging.warning(f"Retry {attempt + 1}/{max_retries} after error: Failed to fetch prices")
+                time.sleep(retry_delay)
         
-        # Update price history
-        self.price_history.append((final_price, current_time))
+        error_msg = " | ".join(errors) if errors else "No valid prices received"
+        logging.error(f"Failed to fetch prices after {max_retries} attempts: {error_msg}")
         
-        # Log price discrepancy if multiple sources
-        if len(prices) > 1:
-            max_diff = max(abs(p - final_price) / final_price for p in prices)
-            if max_diff > 0.001:  # Log if difference is more than 0.1%
-                logging.info(f"Price spread: {max_diff:.3%} across {len(prices)} sources")
+        # Return last known price if available
+        if self.price_history:
+            last_price = self.price_history[-1][0]
+            logging.warning(f"Using last known price: ${last_price:,.2f}")
+            return last_price
         
-        return final_price
+        return None
 
     def rotate_api(self):
         """Rotate to the next available API"""
@@ -534,73 +547,61 @@ class BitcoinTradingBot:
     def execute_trade(self, action: str, amount: float, price: float, reason: str = ""):
         """Execute a trade and update portfolio with proper tracking"""
         try:
-            # Pre-trade validation
+            # Calculate pre-trade portfolio value
+            portfolio_value_before = self.capital + (self.btc_holdings * price)
+            
+            # Execute trade
             if action == "BUY":
                 cost = amount * price
-                if cost > self.capital:
-                    logging.warning(f"Insufficient funds for BUY: Need ${cost:,.2f}, have ${self.capital:,.2f}")
-                    return False
-                if cost < 10:  # Minimum trade size
-                    logging.warning(f"Trade size too small: ${cost:,.2f} < $10.00")
-                    return False
+                self.btc_holdings += amount
+                self.capital -= cost
+                entry_price = price
             elif action == "SELL":
-                if amount > self.btc_holdings:
-                    logging.warning(f"Insufficient BTC for SELL: Need {amount:.8f} BTC, have {self.btc_holdings:.8f} BTC")
-                    return False
-                if amount * price < 10:  # Minimum trade size
-                    logging.warning(f"Trade size too small: ${amount * price:,.2f} < $10.00")
-                    return False
-
-            # Record trade with proper tracking
+                revenue = amount * price
+                self.btc_holdings -= amount
+                self.capital += revenue
+                # Find matching buy price from position stack
+                entry_price = self.position_stack[-1]['entry_price'] if self.position_stack else price
+            
+            # Calculate post-trade portfolio value and PnL
+            portfolio_value_after = self.capital + (self.btc_holdings * price)
+            trade_pnl = portfolio_value_after - portfolio_value_before
+            trade_pnl_pct = trade_pnl / portfolio_value_before if portfolio_value_before > 0 else 0
+            
+            # Record trade with proper PnL tracking
             trade_result = {
                 'action': action,
                 'amount': amount,
                 'price': price,
                 'timestamp': datetime.now().isoformat(),
-                'portfolio_value_before': self.capital + (self.btc_holdings * price),
+                'portfolio_value_before': portfolio_value_before,
+                'portfolio_value_after': portfolio_value_after,
+                'pnl': trade_pnl,
+                'pnl_pct': trade_pnl_pct,
+                'entry_price': entry_price,
                 'reason': reason,
-                'trade_number': len([t for t in self.trade_history if t['action'] != 'INITIAL_POSITION']) + 1,
                 'market_condition': self.analyze_market_condition(),
-                'momentum_data': self.analyze_market_momentum(),
-                'portfolio_state': {
-                    'btc_holdings': self.btc_holdings,
-                    'cash_balance': self.capital
-                }
+                'momentum_data': self.analyze_market_momentum()
             }
-
-            # Execute trade and update portfolio
-            if action == "BUY":
-                self.btc_holdings += amount
-                self.capital -= amount * price
-                self.position_stack.append({
-                    'amount': amount,
-                    'entry_price': price,
-                    'timestamp': datetime.now(),
-                    'active': True,
-                    'type': 'ENTRY',
-                    'reason': reason,
-                    'trade_number': trade_result['trade_number']
-                })
-                logging.info(f"Trade #{trade_result['trade_number']} - BUY: {amount:.8f} BTC at ${price:,.2f} ({reason})")
-            elif action == "SELL":
-                self.btc_holdings -= amount
-                self.capital += amount * price
-                logging.info(f"Trade #{trade_result['trade_number']} - SELL: {amount:.8f} BTC at ${price:,.2f} ({reason})")
-
-            # Record post-trade state
-            trade_result['portfolio_value_after'] = self.capital + (self.btc_holdings * price)
-            trade_result['pnl'] = trade_result['portfolio_value_after'] - trade_result['portfolio_value_before']
-            trade_result['pnl_percentage'] = (trade_result['pnl'] / trade_result['portfolio_value_before']) * 100
-
-            # Update trade history and save immediately
+            
+            # Update trade history
             self.trade_history.append(trade_result)
-            self.save_trade_history()  # Save trade history immediately
-            self.save_bot_state()      # Save full state
-
+            self.save_trade_history()
+            
+            # Log trade details
+            logging.info(f"""
+Trade Executed:
+  Action: {action}
+  Amount: {amount:.8f} BTC
+  Price: ${price:,.2f}
+  PnL: ${trade_pnl:,.2f} ({trade_pnl_pct:.2%})
+  Reason: {reason}
+""")
+            
             return True
-
+            
         except Exception as e:
-            logging.error(f"Error executing trade: {str(e)}")
+            logging.error(f"Trade execution failed: {str(e)}")
             return False
 
     def log_market_data(self, current_price: float):
@@ -840,6 +841,10 @@ Risk Metrics:
 
     def execute_trade_decision(self):
         """Execute trading strategy with complete trade cycle"""
+        # Adjust parameters before making decisions
+        self.adjust_position_parameters()
+        self.adjust_trading_parameters()
+        
         current_price = self.fetch_bitcoin_price()
         if current_price is None:
             return
@@ -888,49 +893,37 @@ Trade Decision Analysis:
         self.save_bot_state()
 
     def _get_trade_decision(self, current_price: float) -> Dict:
+        """Get trading decision with improved market adaptation"""
         market_condition = self.analyze_market_condition()
         momentum = self.analyze_market_momentum()
         
-        # Protect capital in bearish conditions
-        if self.btc_holdings > 0:
-            if market_condition == 'STRONG_BEARISH':
-                return {
-                    'action': 'SELL',
-                    'amount': self.btc_holdings * 0.5,  # Sell half position
-                    'reason': 'STRONG_BEARISH_PROTECTION'
-                }
-            elif market_condition == 'BEARISH' and momentum['direction'] == 'down':
-                return {
-                    'action': 'SELL',
-                    'amount': self.btc_holdings * 0.25,  # Sell quarter position
-                    'reason': 'BEARISH_PROTECTION'
-                }
+        # Calculate optimal position based on market condition
+        optimal_btc_position = self.calculate_optimal_position(market_condition)
+        current_btc_value = self.btc_holdings * current_price
+        portfolio_value = self.capital + current_btc_value
+        current_btc_percentage = current_btc_value / portfolio_value if portfolio_value > 0 else 0
         
-        # Get pattern recognition decision
-        pattern = self.identify_pattern()
-        if pattern['type'] == 'TREND_REVERSAL':
-            if pattern['direction'] == 'up' and self.capital > 0:
-                return {
-                    'action': 'BUY',
-                    'amount': self.calculate_pattern_position_size(current_price, pattern),
-                    'reason': 'TREND_REVERSAL_LONG',
-                    'pattern': pattern
-                }
-            elif pattern['direction'] == 'down' and self.btc_holdings > 0:
-                return {
-                    'action': 'SELL',
-                    'amount': self.btc_holdings * 0.5,  # Sell half on reversal
-                    'reason': 'TREND_REVERSAL_SHORT',
-                    'pattern': pattern
-                }
-        elif pattern['type'] == 'BREAKOUT':
-            if pattern['direction'] == 'up' and self.capital > 0:
-                return {
-                    'action': 'BUY',
-                    'amount': self.calculate_pattern_position_size(current_price, pattern),
-                    'reason': 'BREAKOUT_LONG',
-                    'pattern': pattern
-                }
+        # Determine if rebalancing is needed
+        btc_difference = optimal_btc_position - current_btc_percentage
+        min_trade_value = 100  # Minimum trade size in USD
+        
+        if abs(btc_difference) > 0.05:  # Only rebalance if difference > 5%
+            if btc_difference > 0:  # Need more BTC
+                buy_amount = (btc_difference * portfolio_value) / current_price
+                if buy_amount * current_price >= min_trade_value:
+                    return {
+                        'action': 'BUY',
+                        'amount': buy_amount,
+                        'reason': f'REBALANCE_{market_condition}'
+                    }
+            else:  # Need less BTC
+                sell_amount = (-btc_difference * portfolio_value) / current_price
+                if sell_amount * current_price >= min_trade_value:
+                    return {
+                        'action': 'SELL',
+                        'amount': sell_amount,
+                        'reason': f'REBALANCE_{market_condition}'
+                    }
         
         return {
             'action': 'HOLD',
@@ -1019,45 +1012,46 @@ Trade Decision Analysis:
         return momentum_data
 
     def adjust_trading_parameters(self):
-        """Dynamically adjust trading parameters based on performance"""
-        if self.trade_success_rate['total_trades'] < 10:
-            return  # Need minimum trades for adjustment
+        """Adjust trading parameters based on performance"""
+        if not self.trade_history:
+            return
         
-        success_rate = self.trade_success_rate['success_rate']
+        recent_trades = self.trade_history[-50:]  # Look at last 50 trades
+        if len(recent_trades) < 10:
+            return
         
-        # Adjust thresholds based on success rate
-        if success_rate > 0.6:  # If winning more than 60%
-            # Be more aggressive
-            self.profit_target = min(
-                self.threshold_adjustment['profit_target']['max'],
-                self.profit_target * 1.1
-            )
-            self.stop_loss = max(
-                self.threshold_adjustment['stop_loss']['min'],
-                self.stop_loss * 1.1
-            )
-        elif success_rate < 0.4:  # If winning less than 40%
-            # Be more conservative
-            self.profit_target = max(
-                self.threshold_adjustment['profit_target']['min'],
-                self.profit_target * 0.9
-            )
-            self.stop_loss = min(
-                self.threshold_adjustment['stop_loss']['max'],
-                self.stop_loss * 0.9
-            )
+        # Calculate success metrics with proper error handling
+        win_rate = self.calculate_win_rate()
+        profits = [t.get('pnl_percentage', 0) for t in recent_trades if t.get('pnl_percentage', 0) > 0]
+        losses = [t.get('pnl_percentage', 0) for t in recent_trades if t.get('pnl_percentage', 0) < 0]
+        
+        # Calculate averages with safeguards
+        avg_profit = np.mean(profits) if profits else 0.002  # Default 0.2%
+        avg_loss = abs(np.mean(losses)) if losses else 0.001  # Default 0.1%
+        
+        # Adjust parameters based on win rate
+        if win_rate > 0.4:  # Performing well
+            self.profit_target = min(avg_profit * 0.8, 0.005)  # 80% of avg profit, max 0.5%
+            self.stop_loss = max(-avg_loss * 1.2, -0.003)  # 120% of avg loss, min -0.3%
+            self.scalp_threshold = min(self.calculate_volatility() * 0.15, 0.0004)  # More aggressive
+        else:  # Poor performance
+            self.profit_target = max(avg_profit * 1.2, 0.002)  # More conservative
+            self.stop_loss = min(-avg_loss * 0.8, -0.001)  # Tighter stops
+            self.scalp_threshold = min(self.calculate_volatility() * 0.25, 0.0006)  # More conservative
+        
+        logging.info(f"""
+Parameter Adjustment:
+  Win Rate: {win_rate:.2%}
+  Average Profit: {avg_profit:.4%}
+  Average Loss: {avg_loss:.4%}
+  New Profit Target: {self.profit_target:.4%}
+  New Stop Loss: {self.stop_loss:.4%}
+  New Scalp Threshold: {self.scalp_threshold:.4%}
+""")
 
     def update_trade_metrics(self, trade_result: Dict):
         """Update metrics with enhanced performance logging"""
-        self.trade_success_rate['total_trades'] += 1
-        
-        if trade_result['profit_pct'] > 0:
-            self.trade_success_rate['profitable_trades'] += 1
-        
-        self.trade_success_rate['success_rate'] = (
-            self.trade_success_rate['profitable_trades'] / 
-            self.trade_success_rate['total_trades']
-        )
+        self.update_success_rate(trade_result)
         
         # Log detailed performance metrics
         self.performance_logger.info(
@@ -1277,17 +1271,11 @@ Trade Decision Analysis:
             success_count = sum(1 for trade in successful_trades 
                               if trade['context']['momentum']['direction'] == 
                               ('up' if trade['profit'] > 0 else 'down'))
-            total_trades = len(successful_trades) + len(failed_trades)
-            return success_count / total_trades if total_trades > 0 else 0.5
-        
         elif component == 'trend':
             # Success rate for trades aligned with market condition
             success_count = sum(1 for trade in successful_trades 
                               if trade['context']['market_condition'] in 
                               ['STRONG_BULLISH', 'BULLISH'])
-            total_trades = len(successful_trades) + len(failed_trades)
-            return success_count / total_trades if total_trades > 0 else 0.5
-        
         elif component == 'volatility':
             # Success rate in different volatility conditions
             avg_success_volatility = np.mean([trade['context']['momentum']['volatility'] 
@@ -1660,23 +1648,23 @@ Missed Opportunity Analysis:
                     'count': 0,
                     'avg_profit': 0,
                     'better_actions': {'BUY': 0, 'SELL': 0, 'HOLD': 0}
-                }
+            }
             
             stats = condition_stats[condition]
             stats['count'] += 1
-            stats['avg_profit'] = (stats['avg_profit'] * (stats['count'] - 1) + 
-                                 miss['potential_profit']) / stats['count']
+            stats['avg_profit'] = ((stats['avg_profit'] * (stats['count'] - 1)) + 
+                              miss['potential_profit']) / stats['count']
             stats['better_actions'][miss['better_alternative']] += 1
         
         # Adjust strategy based on findings
         for condition, stats in condition_stats.items():
             if stats['count'] >= 5:  # Need minimum samples
-                # If we consistently miss opportunities in certain conditions
                 if stats['avg_profit'] > self.profit_target:
-                    # Adjust condition multipliers
-                    if 'BUY' in stats['better_actions'] and stats['better_actions']['BUY'] > stats['count'] * 0.6:
+                    if ('BUY' in stats['better_actions'] and 
+                        stats['better_actions']['BUY'] > stats['count'] * 0.6):
                         self.condition_multipliers[condition] *= 1.1  # More aggressive
-                    elif 'SELL' in stats['better_actions'] and stats['better_actions']['SELL'] > stats['count'] * 0.6:
+                    elif ('SELL' in stats['better_actions'] and 
+                          stats['better_actions']['SELL'] > stats['count'] * 0.6):
                         self.condition_multipliers[condition] *= 0.9  # More conservative
         
         logging.info(f"""
@@ -1703,8 +1691,7 @@ Strategy Adjustment Based on Missed Opportunities:
         
         # More stringent conditions only in STRONG_BEARISH markets
         if market_condition == 'STRONG_BEARISH':
-            return (momentum['strength'] > self.momentum_thresholds['strong'] and
-                    price_trend)
+            return (momentum['strength'] > self.momentum_thresholds['strong'] and price_trend)
         
         return True
 
@@ -1758,7 +1745,7 @@ Strategy Adjustment Based on Missed Opportunities:
                         self.position_step,
                         optimal_position,
                         self.adaptation_config['learning_rate']
-                    )
+                    )  # Added closing parenthesis
 
     def _adjust_threshold(self, current: float, optimal: float, learning_rate: float) -> float:
         """Smoothly adjust threshold towards optimal value"""
@@ -1900,7 +1887,7 @@ Threshold Adjustment:
         return (peak_value - current_value) / peak_value
 
     def calculate_win_rate(self) -> float:
-        """Calculate win rate from trade history"""
+        """Calculate win rate with proper handling of protective sells"""
         if not self.trade_history:
             return 0.0
         
@@ -1908,8 +1895,23 @@ Threshold Adjustment:
         if not trades:
             return 0.0
         
-        winning_trades = len([t for t in trades if t.get('pnl', 0) > 0])
-        return winning_trades / len(trades)
+        # Count successful trades (including protective sells that prevented losses)
+        successful_trades = len([t for t in trades if 
+            t.get('pnl', 0) > 0 or  # Profitable trades
+            (t['action'] == 'SELL' and 'PROTECTION' in t.get('reason', ''))  # Protective sells
+        ])
+        
+        win_rate = successful_trades / len(trades)
+        
+        logging.info(f"""
+Trade Statistics:
+  Total Trades: {len(trades)}
+  Successful Trades: {successful_trades}
+  Win Rate: {win_rate:.2%}
+  Average PnL: ${np.mean([t.get('pnl', 0) for t in trades]):.2f}
+""")
+        
+        return win_rate
 
     def calculate_average_profit(self) -> float:
         """Calculate average profit per trade"""
@@ -2054,45 +2056,43 @@ Threshold Adjustment:
         return np.corrcoef(prices, portfolio_values)[0, 1]
 
     def calculate_market_beta(self) -> float:
-        """Calculate portfolio beta"""
-        if len(self.price_history) < 30:
+        """Calculate portfolio beta with proper error handling"""
+        if len(self.price_history) < 30 or len(self.trade_history) < 2:
             return 0.0
         
-        prices = [price for price, _ in self.price_history]
-        portfolio_values = [t.get('portfolio_value_after', 0) for t in self.trade_history]
-        
-        if len(portfolio_values) < 2:
+        try:
+            prices = np.array([price for price, _ in self.price_history])
+            portfolio_values = np.array([t.get('portfolio_value_after', 0) 
+                                       for t in self.trade_history])
+            
+            # Ensure we have valid data
+            if len(portfolio_values) < 2 or np.all(portfolio_values == 0):
+                return 0.0
+            
+            # Calculate returns
+            price_returns = np.diff(prices) / prices[:-1]
+            portfolio_returns = np.diff(portfolio_values) / portfolio_values[:-1]
+            
+            # Remove any invalid values
+            valid_mask = ~(np.isnan(price_returns) | np.isnan(portfolio_returns))
+            price_returns = price_returns[valid_mask]
+            portfolio_returns = portfolio_returns[valid_mask]
+            
+            if len(price_returns) < 2:
+                return 0.0
+                
+            # Calculate beta
+            covariance = np.cov(price_returns, portfolio_returns, ddof=1)[0][1]
+            market_variance = np.var(price_returns, ddof=1)
+            
+            if market_variance == 0:
+                return 0.0
+                
+            return covariance / market_variance
+            
+        except Exception as e:
+            logging.error(f"Error calculating beta: {str(e)}")
             return 0.0
-        
-        # Filter out zero values
-        valid_indices = [i for i in range(len(portfolio_values)-1) 
-                        if portfolio_values[i] != 0 and portfolio_values[i+1] != 0]
-        
-        if not valid_indices:
-            return 0.0
-        
-        # Calculate returns only for valid values
-        market_returns = [
-            (prices[i+1] - prices[i]) / prices[i] 
-            for i in valid_indices
-        ]
-        
-        portfolio_returns = [
-            (portfolio_values[i+1] - portfolio_values[i]) / portfolio_values[i]
-            for i in valid_indices
-        ]
-        
-        # Calculate beta
-        if market_returns and portfolio_returns:
-            try:
-                covariance = np.cov(market_returns, portfolio_returns)[0][1]
-                market_variance = np.var(market_returns)
-                if market_variance != 0:
-                    return covariance / market_variance
-            except (ValueError, IndexError):
-                logging.warning("Error calculating beta - insufficient data")
-        
-        return 0.0
 
     def calculate_alpha(self) -> float:
         """Calculate portfolio alpha"""
@@ -2308,6 +2308,79 @@ Pattern Performance Update - {pattern_type}:
   Average Profit: {pattern_data['avg_profit']:.2%}
   Total Trades: {total_trades}
 """)
+
+    def adjust_position_parameters(self):
+        """Adjust position parameters based on portfolio size and performance"""
+        portfolio_value = self.capital + (self.btc_holdings * self.fetch_bitcoin_price())
+        win_rate = self.calculate_win_rate()
+        
+        # Base position sizes on portfolio value
+        if portfolio_value > 100000:  # Large portfolio
+            base_min = 0.20
+            base_max = 0.60
+            base_step = 0.10
+        elif portfolio_value > 50000:  # Medium portfolio
+            base_min = 0.25
+            base_max = 0.70
+            base_step = 0.12
+        else:  # Small portfolio
+            base_min = 0.30
+            base_max = 0.80
+            base_step = 0.15
+        
+        # Adjust based on performance
+        if win_rate > 0.5:  # Good performance - be more aggressive
+            self.min_position_size = base_min * 1.2
+            self.max_position_size = min(base_max * 1.3, 0.90)
+            self.position_step = base_step * 1.2
+        elif win_rate < 0.3:  # Poor performance - be more conservative
+            self.min_position_size = base_min * 0.8
+            self.max_position_size = base_max * 0.7
+            self.position_step = base_step * 0.8
+        else:  # Average performance - use base values
+            self.min_position_size = base_min
+            self.max_position_size = base_max
+            self.position_step = base_step
+        
+        logging.info(f"""
+Position Parameter Adjustment:
+  Portfolio Value: ${portfolio_value:,.2f}
+  Win Rate: {win_rate:.2%}
+  Min Position Size: {self.min_position_size:.2%}
+  Max Position Size: {self.max_position_size:.2%}
+  Position Step: {self.position_step:.2%}
+""")
+
+    def update_success_rate(self, trade_result: Dict):
+        """Track success rate more accurately"""
+        if trade_result.get('pnl', 0) > 0:
+            self.trade_success_rate['profitable_trades'] += 1
+        
+        self.trade_success_rate['total_trades'] += 1
+        
+        # Calculate rolling success rate
+        self.trade_success_rate['success_rate'] = (
+            self.trade_success_rate['profitable_trades'] / 
+            self.trade_success_rate['total_trades']
+        )
+        
+        logging.info(f"""
+Success Rate Update:
+  Total Trades: {self.trade_success_rate['total_trades']}
+  Profitable Trades: {self.trade_success_rate['profitable_trades']}
+  Success Rate: {self.trade_success_rate['success_rate']:.2%}
+""")
+
+    def calculate_optimal_position(self, market_condition: str) -> float:
+        """Calculate optimal BTC position based on market conditions"""
+        if market_condition == 'STRONG_BULLISH':
+            return 0.7  # 70% BTC
+        elif market_condition == 'BULLISH':
+            return 0.5  # 50% BTC
+        elif market_condition == 'NEUTRAL':
+            return 0.3  # 30% BTC
+        else:
+            return 0.1  # 10% BTC in bearish conditions
 
 def main():
     """Main bot loop with enhanced monitoring"""
