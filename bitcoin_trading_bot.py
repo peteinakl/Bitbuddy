@@ -313,7 +313,7 @@ class BitcoinTradingBot:
         self.performance_logger.addHandler(performance_handler)
 
     def load_existing_portfolio(self):
-        """Initialize portfolio with balanced allocation"""
+        """Initialize portfolio with consistent allocation"""
         try:
             # Try to load existing state first
             with open('bot_state.json', 'r') as f:
@@ -335,7 +335,7 @@ class BitcoinTradingBot:
         except (FileNotFoundError, KeyError, json.JSONDecodeError) as e:
             logging.warning(f"Could not load existing portfolio: {str(e)}")
             
-            # Initialize new portfolio with 50/50 split
+            # Initialize new portfolio
             self.initial_capital = 10000.0
             current_price = self.fetch_bitcoin_price()
             
@@ -370,7 +370,7 @@ class BitcoinTradingBot:
             
             logging.info(f"Initialized new portfolio with 50/50 balance:")
             logging.info(f"BTC Holdings: {self.btc_holdings:.8f} BTC (${self.btc_holdings * current_price:,.2f})")
-            logging.info(f"Entry Price: ${current_price:,.2f}")
+            logging.info(f"Entry Price: ${current_price:.2f}")
             logging.info(f"Cash Balance: ${self.capital:.2f}")
         
         except (FileNotFoundError, KeyError, json.JSONDecodeError) as e:
