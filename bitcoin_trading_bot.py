@@ -111,16 +111,16 @@ class BitcoinTradingBot:
         else:
             logging.info(f"Bot initialized with portfolio value: ${self.capital:,.2f}")
         
-        # Trading parameters - more aggressive
+        # Trading parameters - balanced risk management
         self.position_stack = []
         self.max_positions = 3
-        self.min_position_size = 0.50    # Increased from 0.40
-        self.max_position_size = 0.90    # Increased from 0.80
-        self.position_step = 0.15        # Larger steps
-        self.scalp_threshold = 0.0002    # Reduced from 0.0003
-        self.profit_target = 0.003       # Reduced from 0.004
-        self.stop_loss = -0.002         # Tighter stop
-        self.trailing_stop = 0.001      # Tighter trailing
+        self.min_position_size = 0.20    # 20% minimum position (reduced from 0.50 for better risk control)
+        self.max_position_size = 0.60    # 60% maximum position (reduced from 0.90 to prevent overexposure)
+        self.position_step = 0.10        # 10% position steps
+        self.scalp_threshold = 0.001     # 0.1% entry threshold (5x increase for better signal quality)
+        self.profit_target = 0.015       # 1.5% profit target (5x increase for realistic Bitcoin volatility)
+        self.stop_loss = -0.008         # -0.8% stop loss (4x increase to avoid noise stops)
+        self.trailing_stop = 0.005      # 0.5% trailing stop (5x increase for realistic trails)
         
         # Add trailing stop loss
         self.trailing_active = False
@@ -153,11 +153,11 @@ class BitcoinTradingBot:
                              'STRONG_BEARISH', 'VOLATILE_RANGE', 'RANGING']
         }
         
-        # Dynamic threshold adjustment
+        # Dynamic threshold adjustment (updated to realistic ranges for Bitcoin)
         self.threshold_adjustment = {
-            'profit_target': {'base': 0.0015, 'min': 0.0008, 'max': 0.0025},
-            'stop_loss': {'base': -0.0010, 'min': -0.0015, 'max': -0.0005},
-            'entry_threshold': {'base': 0.0008, 'min': 0.0005, 'max': 0.0012}
+            'profit_target': {'base': 0.015, 'min': 0.010, 'max': 0.025},    # 1-2.5% profit range
+            'stop_loss': {'base': -0.008, 'min': -0.015, 'max': -0.005},     # 0.5-1.5% stop range
+            'entry_threshold': {'base': 0.002, 'min': 0.001, 'max': 0.003}   # 0.1-0.3% entry range
         }
         
         # Market momentum tracking
@@ -210,9 +210,9 @@ class BitcoinTradingBot:
         
         # More responsive momentum thresholds
         self.momentum_thresholds = {
-            'strong': 0.0001,  # Reduced from 0.0002
-            'medium': 0.00005, # Reduced from 0.00008
-            'weak': 0.00002    # Reduced from 0.00003
+            'strong': 0.001,   # 0.1% - increased 10x for better signal quality
+            'medium': 0.0005,  # 0.05% - increased 10x to reduce false signals
+            'weak': 0.0002     # 0.02% - increased 10x for noise filtering
         }
         
         # Bull market parameters
@@ -531,15 +531,16 @@ class BitcoinTradingBot:
         medium_momentum = (recent_prices[-1] - recent_prices[-10]) / recent_prices[-10]
         
         # More responsive conditions
-        if short_momentum > self.scalp_threshold * 0.5:
+        # More responsive conditions with higher thresholds for better signal quality
+        if short_momentum > self.scalp_threshold * 2.0:  # 0.2% for BULLISH signal
             if ema_fast > ema_medium > ema_slow:
                 return "STRONG_BULLISH"
             return "BULLISH"
-        elif short_momentum < -self.scalp_threshold * 0.5:
+        elif short_momentum < -self.scalp_threshold * 2.0:  # -0.2% for BEARISH signal
             if ema_fast < ema_medium < ema_slow:
                 return "STRONG_BEARISH"
             return "BEARISH"
-        elif abs(short_momentum) < self.scalp_threshold * 0.2:
+        elif abs(short_momentum) < self.scalp_threshold * 0.5:  # 0.05% for RANGING
             return "RANGING"
         
         return "NEUTRAL"
@@ -568,7 +569,7 @@ class BitcoinTradingBot:
             trade_pnl = portfolio_value_after - portfolio_value_before
             trade_pnl_pct = trade_pnl / portfolio_value_before if portfolio_value_before > 0 else 0
             
-            # Record trade with proper PnL tracking
+            # Record trade with proper PnL tracking and ML learning fields
             trade_result = {
                 'action': action,
                 'amount': amount,
@@ -578,24 +579,65 @@ class BitcoinTradingBot:
                 'portfolio_value_after': portfolio_value_after,
                 'pnl': trade_pnl,
                 'pnl_pct': trade_pnl_pct,
+                'pnl_percentage': trade_pnl_pct,  # Alias for learning methods
                 'entry_price': entry_price,
                 'reason': reason,
                 'market_condition': self.analyze_market_condition(),
-                'momentum_data': self.analyze_market_momentum()
+                'momentum_data': self.analyze_market_momentum(),
+                # ML learning fields
+                'momentum_threshold': self.momentum_thresholds['medium'],
+                'position_size': amount * price / portfolio_value_before if portfolio_value_before > 0 else 0,
+                'market_volatility': self.calculate_volatility(),
+                'entry_pattern': self.identify_pattern(),
+                'context': {
+                    'time': datetime.now().isoformat(),
+                    'day_of_week': datetime.now().weekday(),
+                    'hour': datetime.now().hour
+                }
             }
             
             # Update trade history
             self.trade_history.append(trade_result)
             self.save_trade_history()
-            
-            # Log trade details
+
+            # ML LEARNING: Update learning systems after completed trades (SELL exits)
+            if action == 'SELL':
+                self.update_learning_data(trade_result)
+                self.learn_from_trade(trade_result)
+                logging.info("🧠 Learning systems updated with trade outcome")
+
+            # Save learning data periodically
+            if len(self.trade_history) % 10 == 0:
+                self.save_learning_data()
+                logging.debug(f"💾 Learning data saved ({len(self.trade_history)} trades)")
+
+            # Calculate total portfolio performance
+            total_pnl = portfolio_value_after - self.initial_capital
+            total_pnl_pct = (total_pnl / self.initial_capital) * 100
+
+            # Visual indicators
+            trade_indicator = "✅ PROFIT" if trade_pnl > 0 else "❌ LOSS" if trade_pnl < 0 else "➡️  NEUTRAL"
+            portfolio_indicator = "📈" if total_pnl > 0 else "📉" if total_pnl < 0 else "➡️"
+
+            # Log trade details with portfolio context
             logging.info(f"""
-Trade Executed:
-  Action: {action}
-  Amount: {amount:.8f} BTC
-  Price: ${price:,.2f}
-  PnL: ${trade_pnl:,.2f} ({trade_pnl_pct:.2%})
-  Reason: {reason}
+{'='*60}
+🔔 TRADE EXECUTED - {trade_indicator}
+{'='*60}
+Action:           {action}
+Amount:           {amount:.8f} BTC
+Price:            ${price:,.2f}
+Trade P&L:        ${trade_pnl:,.2f} ({trade_pnl_pct:+.2%})
+Reason:           {reason}
+───────────────────────────────────────────────────────────
+{portfolio_indicator} PORTFOLIO STATUS
+───────────────────────────────────────────────────────────
+Initial Capital:  ${self.initial_capital:,.2f}
+Current Value:    ${portfolio_value_after:,.2f}
+Total P&L:        ${total_pnl:+,.2f} ({total_pnl_pct:+.2f}%)
+Cash Balance:     ${self.capital:,.2f}
+BTC Holdings:     {self.btc_holdings:.8f} BTC
+{'='*60}
 """)
             
             return True
@@ -634,6 +676,65 @@ Trade Executed:
             logging.error(f"Error saving trade history: {str(e)}")
             logging.error(traceback.format_exc())
 
+    def log_decision(self, decision_type: str, decision: Dict, current_price: float, reason: str = ""):
+        """Log ALL trading decisions (executed, rejected, holds) for comprehensive audit trail"""
+        if not hasattr(self, 'decision_log'):
+            self.decision_log = []
+
+        # Create decision record
+        decision_record = {
+            'timestamp': datetime.now().isoformat(),
+            'decision_type': decision_type,  # 'TRADE_EXECUTED', 'TRADE_REJECTED', 'HOLD', 'CIRCUIT_BREAKER'
+            'action': decision.get('action', 'N/A'),
+            'amount': decision.get('amount', 0),
+            'price': current_price,
+            'reason': reason or decision.get('reason', 'N/A'),
+            'market_condition': self.analyze_market_condition(),
+            'momentum': self.analyze_market_momentum(),
+            'portfolio_value': self.capital + (self.btc_holdings * current_price),
+            'cash': self.capital,
+            'btc_holdings': self.btc_holdings,
+            'volatility': self.calculate_volatility(),
+            'current_parameters': {
+                'profit_target': self.profit_target,
+                'stop_loss': self.stop_loss,
+                'scalp_threshold': self.scalp_threshold,
+                'max_position_size': self.max_position_size
+            }
+        }
+
+        self.decision_log.append(decision_record)
+
+        # Save to file
+        try:
+            with open('decision_audit_log.json', 'w') as f:
+                json.dump(self.decision_log, f, indent=4, default=str)
+        except Exception as e:
+            logging.error(f"Error saving decision log: {str(e)}")
+
+    def log_parameter_change(self, parameter_name: str, old_value, new_value, reason: str):
+        """Log when trading parameters change for audit trail"""
+        if not hasattr(self, 'parameter_changes'):
+            self.parameter_changes = []
+
+        change_record = {
+            'timestamp': datetime.now().isoformat(),
+            'parameter': parameter_name,
+            'old_value': old_value,
+            'new_value': new_value,
+            'reason': reason,
+            'trade_count': len(self.trade_history)
+        }
+
+        self.parameter_changes.append(change_record)
+
+        # Save to file
+        try:
+            with open('parameter_changes.json', 'w') as f:
+                json.dump(self.parameter_changes, f, indent=4, default=str)
+        except Exception as e:
+            logging.error(f"Error saving parameter changes: {str(e)}")
+
     def generate_report(self):
         """Generate performance report"""
         current_price = self.fetch_bitcoin_price()
@@ -665,43 +766,68 @@ Trade Executed:
             logging.info(f"Created new market data file: {self.market_data_file}")
 
     def display_status(self):
-        """Display current bot status with detailed P/L information"""
+        """Display current bot status with detailed P/L information and visual indicators"""
         current_price = self.fetch_bitcoin_price()
         if current_price is None:
             logging.error("Could not fetch current price for status update")
             return
-        
+
         # Calculate portfolio metrics
         portfolio_value = self.capital + (self.btc_holdings * current_price)
         total_pnl = portfolio_value - self.initial_capital
         pnl_percentage = (total_pnl / self.initial_capital) * 100
-        
+
+        # Visual indicators for P&L
+        if total_pnl > 0:
+            pnl_indicator = "📈 PROFIT"
+            pnl_symbol = "+"
+        elif total_pnl < 0:
+            pnl_indicator = "📉 LOSS"
+            pnl_symbol = ""
+        else:
+            pnl_indicator = "➡️  BREAK EVEN"
+            pnl_symbol = ""
+
         # Calculate active positions and trades (excluding initial position)
         active_positions = len([p for p in self.position_stack if p.get('active', True)])
         total_trades = len([t for t in self.trade_history if t['action'] not in ['INITIAL_POSITION', 'HOLD']])
-        
+
         # Calculate success rate
         successful_trades = len([t for t in self.trade_history if t.get('pnl', 0) > 0])
         success_rate = (successful_trades / total_trades * 100) if total_trades > 0 else 0
-        
-        status = f"""
-{'='*50}
-BITCOIN TRADING BOT - STATUS UPDATE
-{'='*50}
-Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 
-CURRENT MARKET
--------------
+        # Calculate drawdown
+        if not hasattr(self, 'peak_portfolio_value'):
+            self.peak_portfolio_value = portfolio_value
+        else:
+            self.peak_portfolio_value = max(self.peak_portfolio_value, portfolio_value)
+
+        current_drawdown = (self.peak_portfolio_value - portfolio_value) / self.peak_portfolio_value if self.peak_portfolio_value > 0 else 0
+
+        status = f"""
+{'='*60}
+💰 BITCOIN TRADING BOT - STATUS UPDATE
+{'='*60}
+🕐 Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+📊 CURRENT MARKET
+─────────────────
 Bitcoin Price: ${current_price:,.2f}
-24h Change: {self.calculate_price_change()*100:.2f}%
+24h Change: {self.calculate_price_change()*100:+.2f}%
 Market Condition: {self.analyze_market_condition()}
 
-PORTFOLIO SUMMARY
-----------------
-Portfolio Value: ${portfolio_value:,.2f}
-Total P/L: ${total_pnl:,.2f} ({pnl_percentage:+.2f}%)
-Cash Balance: ${self.capital:,.2f}
-BTC Holdings: {self.btc_holdings:.8f} BTC (${(self.btc_holdings * current_price):,.2f})
+💼 PORTFOLIO SUMMARY
+────────────────────
+Initial Capital:  ${self.initial_capital:,.2f}
+Current Value:    ${portfolio_value:,.2f}
+═══════════════════════════════════════
+{pnl_indicator}
+Total P&L:        {pnl_symbol}${abs(total_pnl):,.2f} ({pnl_percentage:+.2f}%)
+═══════════════════════════════════════
+Cash Balance:     ${self.capital:,.2f}
+BTC Holdings:     {self.btc_holdings:.8f} BTC
+BTC Value:        ${(self.btc_holdings * current_price):,.2f}
+Drawdown:         {current_drawdown:.2%} (Peak: ${self.peak_portfolio_value:,.2f})
 
 TRADING ACTIVITY
 ---------------
@@ -769,28 +895,48 @@ Risk Metrics:
 """
 
     def calculate_optimal_position_size(self, current_price: float, trend_strength: float) -> float:
-        """Calculate position size with aggressive trend following"""
+        """Calculate position size with risk-managed trend following"""
         portfolio_value = self.capital + (self.btc_holdings * current_price)
-        
+
         # Calculate volatility adjustment
         volatility = self.calculate_volatility()
         volatility_factor = max(0.5, min(1.5, self.max_volatility / volatility if volatility > 0 else 1.5))
-        
+
         # Base position size with volatility adjustment
         base_size = portfolio_value * self.min_position_size * volatility_factor
-        
-        # More aggressive trend multiplier
-        trend_multiplier = min(3.0, max(1.0, 1.0 + trend_strength * 100))
+
+        # Controlled trend multiplier (reduced from 3.0x to 2.0x for better risk management)
+        trend_multiplier = min(2.0, max(1.0, 1.0 + trend_strength * 50))
         position_size = base_size * trend_multiplier
-        
-        # Ensure within limits but allow larger positions in strong trends
+
+        # CRITICAL: Enforce strict maximum position size - NEVER exceed 60% of portfolio
         max_position = min(
-            portfolio_value * self.max_position_size * trend_multiplier,
-            portfolio_value * 0.95  # Allow up to 95% in very strong trends
+            portfolio_value * self.max_position_size,  # Respect configured max (60%)
+            portfolio_value * 0.60  # HARD CAP at 60% - prevents catastrophic losses
         )
-        min_position = max(self.min_trade_size, portfolio_value * 0.2)  # Minimum 20% position
-        
+        min_position = max(self.min_trade_size, portfolio_value * self.min_position_size)  # Use configured min
+
         return min(max_position, max(min_position, position_size))
+
+    def get_learned_optimal_position_size(self, market_condition: str, base_size: float) -> float:
+        """Retrieve learned optimal position size for current market condition"""
+        if market_condition not in self.learning_data['market_conditions']:
+            return base_size
+
+        condition_data = self.learning_data['market_conditions'][market_condition]
+
+        # Need at least 10 trades to trust learned values
+        if len(condition_data.get('trades', [])) < 10:
+            return base_size
+
+        learned_size = condition_data.get('optimal_position_size', base_size)
+
+        # Blend learned size with base size (70% learned, 30% base for safety)
+        blended_size = (learned_size * 0.7) + (base_size * 0.3)
+
+        logging.info(f"ML position sizing: Base={base_size:.2%}, Learned={learned_size:.2%}, Blended={blended_size:.2%} for {market_condition}")
+
+        return blended_size
 
     def calculate_position_fraction(self, market_condition: str, momentum: Dict, current_price: float) -> float:
         """More conservative position sizing"""
@@ -840,18 +986,57 @@ Risk Metrics:
         return 0.5
 
     def execute_trade_decision(self):
-        """Execute trading strategy with complete trade cycle"""
-        # Adjust parameters before making decisions
-        self.adjust_position_parameters()
-        self.adjust_trading_parameters()
-        
+        """Execute trading strategy with complete trade cycle and circuit breakers"""
+        # Get current price first
         current_price = self.fetch_bitcoin_price()
         if current_price is None:
             return
-        
-        # Log market data first
+
+        # 🚨 CRITICAL: Check risk limits FIRST - circuit breaker logic
+        risk_status = self.check_risk_limits(current_price)
+
+        if not risk_status['trading_allowed']:
+            logging.error(f"🛑 TRADING HALTED: {risk_status['halt_reason']}")
+
+            # Log circuit breaker activation to audit trail
+            self.log_decision('CIRCUIT_BREAKER', {
+                'action': 'HALT',
+                'amount': 0
+            }, current_price, risk_status['halt_reason'])
+
+            # Emergency liquidation if max drawdown breach
+            if risk_status['max_drawdown_breach'] and self.btc_holdings > 0:
+                logging.error("⚠️  EMERGENCY LIQUIDATION: Closing all positions due to max drawdown breach")
+                self.execute_trade('SELL', self.btc_holdings, current_price, 'EMERGENCY_DRAWDOWN_EXIT')
+
+            self.save_bot_state()
+            return
+
+        # Risk mitigation: Reduce position sizes by 50% if in significant drawdown
+        position_size_multiplier = 1.0
+        if risk_status['current_drawdown'] > 0.10:  # In 10%+ drawdown
+            position_size_multiplier = 0.5
+            logging.warning(f"⚠️  Risk reduction active: Position sizes reduced by 50% due to {risk_status['current_drawdown']:.1%} drawdown")
+
+        # Adjust parameters and strategy weights before making decisions
+        self.adjust_position_parameters()
+        self.adjust_trading_parameters()
+        self.adjust_strategy_weights()  # Connect ML learning - adjust component weights
+
+        # Every 50 trades, update adaptive thresholds based on performance patterns
+        if len(self.trade_history) % 50 == 0 and len(self.trade_history) > 0:
+            self.update_adaptive_thresholds()
+            logging.info("📊 Adaptive thresholds updated based on 50-trade performance window")
+
+        # Apply position size reduction if in drawdown
+        if position_size_multiplier < 1.0:
+            original_max = self.max_position_size
+            self.max_position_size = original_max * position_size_multiplier
+            logging.info(f"Position size cap temporarily reduced: {original_max:.1%} → {self.max_position_size:.1%}")
+
+        # Log market data
         self.log_market_data(current_price)
-        
+
         # First manage existing positions
         for position in self.position_stack:
             if position.get('active', True):
@@ -884,47 +1069,116 @@ Trade Decision Analysis:
             success = self.execute_trade('BUY', decision['amount'], current_price, decision['reason'])
             if success:
                 logging.info(f"Successfully executed BUY trade")
+                self.log_decision('TRADE_EXECUTED', decision, current_price, decision['reason'])
         elif decision['action'] == 'SELL' and self.btc_holdings > 0:  # Check for available BTC
             success = self.execute_trade('SELL', decision['amount'], current_price, decision['reason'])
             if success:
                 logging.info(f"Successfully executed SELL trade")
-        
+                self.log_decision('TRADE_EXECUTED', decision, current_price, decision['reason'])
+        else:
+            # If no trade executed, log the decision and show quick portfolio status
+            if decision['action'] != 'HOLD':
+                # Trade was rejected (insufficient capital/BTC)
+                self.log_decision('TRADE_REJECTED', decision, current_price,
+                                f"Insufficient {'capital' if decision['action'] == 'BUY' else 'BTC'}")
+            else:
+                # Normal HOLD decision
+                self.log_decision('HOLD', decision, current_price, decision['reason'])
+
+            portfolio_value = self.capital + (self.btc_holdings * current_price)
+            total_pnl = portfolio_value - self.initial_capital
+            total_pnl_pct = (total_pnl / self.initial_capital) * 100
+            pnl_indicator = "📈" if total_pnl > 0 else "📉" if total_pnl < 0 else "➡️"
+
+            logging.info(f"""
+{pnl_indicator} Portfolio: ${portfolio_value:,.2f} | P&L: ${total_pnl:+,.2f} ({total_pnl_pct:+.2f}%) | Decision: {decision['action']} - {decision['reason']}
+""")
+
         # Save state after trade
         self.save_bot_state()
 
     def _get_trade_decision(self, current_price: float) -> Dict:
-        """Get trading decision with improved market adaptation"""
+        """Get trading decision with momentum validation and entry confirmation"""
         market_condition = self.analyze_market_condition()
         momentum = self.analyze_market_momentum()
-        
+
+        # VALIDATE ENTRY CONDITIONS FIRST - prevent bad entries
+        if not self._validate_entry_conditions(market_condition, momentum, current_price):
+            return {
+                'action': 'HOLD',
+                'amount': 0,
+                'reason': 'ENTRY_VALIDATION_FAILED'
+            }
+
         # Calculate optimal position based on market condition
         optimal_btc_position = self.calculate_optimal_position(market_condition)
         current_btc_value = self.btc_holdings * current_price
         portfolio_value = self.capital + current_btc_value
         current_btc_percentage = current_btc_value / portfolio_value if portfolio_value > 0 else 0
-        
+
         # Determine if rebalancing is needed
         btc_difference = optimal_btc_position - current_btc_percentage
         min_trade_value = 100  # Minimum trade size in USD
-        
+
+        # MOMENTUM REQUIREMENT FOR ENTRIES
+        min_momentum_for_entry = self.momentum_thresholds['medium']  # 0.0005 (0.05%)
+
         if abs(btc_difference) > 0.05:  # Only rebalance if difference > 5%
-            if btc_difference > 0:  # Need more BTC
-                buy_amount = (btc_difference * portfolio_value) / current_price
+            if btc_difference > 0:  # Need more BTC - BULLISH REBALANCE
+                # REQUIRE POSITIVE MOMENTUM FOR BUYS
+                if momentum['direction'] != 'up' or momentum['strength'] < min_momentum_for_entry:
+                    logging.info(f"Buy signal rejected: insufficient momentum (strength={momentum['strength']:.6f}, direction={momentum['direction']})")
+                    return {
+                        'action': 'HOLD',
+                        'amount': 0,
+                        'reason': 'INSUFFICIENT_MOMENTUM_FOR_BUY'
+                    }
+
+                # ADDITIONAL CONFIRMATION: Check recent price trend
+                if len(self.price_history) >= 5:
+                    recent_prices = [p for p, _ in self.price_history[-5:]]
+                    price_increasing = recent_prices[-1] > recent_prices[0]
+                    if not price_increasing:
+                        logging.info("Buy signal rejected: price not in uptrend")
+                        return {
+                            'action': 'HOLD',
+                            'amount': 0,
+                            'reason': 'PRICE_NOT_INCREASING'
+                        }
+
+                # Calculate position size with momentum scaling
+                buy_amount_value = btc_difference * portfolio_value
+
+                # Scale position size by momentum strength (1-2x multiplier)
+                momentum_multiplier = min(2.0, 1.0 + (momentum['strength'] / min_momentum_for_entry))
+                buy_amount_value *= momentum_multiplier
+
+                # Apply VaR adjustment to limit position size based on risk
+                adjusted_buy_value = self.calculate_var_adjusted_position_size(buy_amount_value, current_price)
+
+                # Apply volatility adjustment to scale position with market conditions
+                adjusted_buy_value = self.calculate_volatility_adjusted_position_size(adjusted_buy_value, current_price)
+
+                buy_amount = adjusted_buy_value / current_price
+
                 if buy_amount * current_price >= min_trade_value:
+                    logging.info(f"Momentum-validated BUY: strength={momentum['strength']:.6f}, multiplier={momentum_multiplier:.2f}")
                     return {
                         'action': 'BUY',
                         'amount': buy_amount,
-                        'reason': f'REBALANCE_{market_condition}'
+                        'reason': f'MOMENTUM_ENTRY_{market_condition}_strength_{momentum["strength"]:.6f}'
                     }
-            else:  # Need less BTC
+
+            else:  # Need less BTC - BEARISH REBALANCE
+                # SELLS don't require momentum confirmation (risk reduction is always allowed)
                 sell_amount = (-btc_difference * portfolio_value) / current_price
                 if sell_amount * current_price >= min_trade_value:
                     return {
                         'action': 'SELL',
                         'amount': sell_amount,
-                        'reason': f'REBALANCE_{market_condition}'
+                        'reason': f'RISK_REDUCTION_{market_condition}'
                     }
-        
+
         return {
             'action': 'HOLD',
             'amount': 0,
@@ -1029,15 +1283,31 @@ Trade Decision Analysis:
         avg_profit = np.mean(profits) if profits else 0.002  # Default 0.2%
         avg_loss = abs(np.mean(losses)) if losses else 0.001  # Default 0.1%
         
+        # Store old values for logging
+        old_profit_target = self.profit_target
+        old_stop_loss = self.stop_loss
+        old_scalp_threshold = self.scalp_threshold
+
         # Adjust parameters based on win rate
         if win_rate > 0.4:  # Performing well
-            self.profit_target = min(avg_profit * 0.8, 0.005)  # 80% of avg profit, max 0.5%
-            self.stop_loss = max(-avg_loss * 1.2, -0.003)  # 120% of avg loss, min -0.3%
-            self.scalp_threshold = min(self.calculate_volatility() * 0.15, 0.0004)  # More aggressive
-        else:  # Poor performance
-            self.profit_target = max(avg_profit * 1.2, 0.002)  # More conservative
-            self.stop_loss = min(-avg_loss * 0.8, -0.001)  # Tighter stops
-            self.scalp_threshold = min(self.calculate_volatility() * 0.25, 0.0006)  # More conservative
+            self.profit_target = min(avg_profit * 0.8, 0.015)  # 80% of avg profit, max 1.5%
+            self.stop_loss = max(-avg_loss * 1.2, -0.008)  # 120% of avg loss, min -0.8%
+            self.scalp_threshold = min(self.calculate_volatility() * 0.5, 0.002)  # More aggressive (0.2%)
+        else:  # Poor performance - GIVE MORE ROOM, NOT LESS
+            self.profit_target = max(avg_profit * 1.5, 0.010)  # Aim for 1% profit minimum
+            self.stop_loss = max(-avg_loss * 0.6, -0.005)  # CRITICAL FIX: Use max() for WIDER stops (-0.5% minimum)
+            self.scalp_threshold = max(self.calculate_volatility() * 1.0, 0.001)  # Less aggressive entries (0.1%)
+
+        # Log parameter changes if significant (>5% change)
+        if abs(self.profit_target - old_profit_target) / old_profit_target > 0.05:
+            self.log_parameter_change('profit_target', old_profit_target, self.profit_target,
+                                     f"Win rate: {win_rate:.2%}, Avg profit: {avg_profit:.4%}")
+        if abs(self.stop_loss - old_stop_loss) / abs(old_stop_loss) > 0.05:
+            self.log_parameter_change('stop_loss', old_stop_loss, self.stop_loss,
+                                     f"Win rate: {win_rate:.2%}, Avg loss: {avg_loss:.4%}")
+        if abs(self.scalp_threshold - old_scalp_threshold) / old_scalp_threshold > 0.05:
+            self.log_parameter_change('scalp_threshold', old_scalp_threshold, self.scalp_threshold,
+                                     f"Win rate: {win_rate:.2%}, Volatility: {self.calculate_volatility():.4%}")
         
         logging.info(f"""
 Parameter Adjustment:
@@ -1084,36 +1354,237 @@ Parameter Adjustment:
         
         return True
 
-    def manage_position(self, position: Dict, current_price: float, market_condition: str):
-        """Enhanced position management with profit taking"""
+    def _update_trailing_stop(self, position: Dict, current_price: float) -> float:
+        """Update and return trailing stop price for a position"""
         entry_price = position['entry_price']
         current_pnl = (current_price - entry_price) / entry_price
-        
-        # Take profits at different levels
-        if current_pnl >= self.profit_target * 2:  # Double target
+
+        # Activate trailing stop once profit target is reached
+        if current_pnl >= self.profit_target:
+            if 'trailing_stop_price' not in position:
+                # Initialize trailing stop at current price minus trailing distance
+                position['trailing_stop_price'] = current_price * (1 - self.trailing_stop)
+                position['highest_price'] = current_price
+                logging.info(f"Trailing stop activated at ${position['trailing_stop_price']:,.2f} (current: ${current_price:,.2f})")
+            else:
+                # Update if new high is reached
+                if current_price > position['highest_price']:
+                    position['highest_price'] = current_price
+                    position['trailing_stop_price'] = current_price * (1 - self.trailing_stop)
+                    logging.info(f"Trailing stop updated to ${position['trailing_stop_price']:,.2f} (new high: ${current_price:,.2f})")
+
+            return position['trailing_stop_price']
+
+        return None
+
+    def manage_position(self, position: Dict, current_price: float, market_condition: str):
+        """Enhanced position management with trailing stops and profit taking"""
+        entry_price = position['entry_price']
+        current_pnl = (current_price - entry_price) / entry_price
+
+        # Check trailing stop FIRST (highest priority after activation)
+        trailing_stop_price = self._update_trailing_stop(position, current_price)
+        if trailing_stop_price and current_price <= trailing_stop_price:
+            logging.info(f"Trailing stop hit at ${current_price:,.2f} (stop: ${trailing_stop_price:,.2f}, profit: {current_pnl:.2%})")
+            return {
+                'action': 'SELL',
+                'amount': position['amount'],
+                'reason': 'TRAILING_STOP'
+            }
+
+        # Take full profits at 2x target
+        if current_pnl >= self.profit_target * 2:  # Double target (3%)
             return {
                 'action': 'SELL',
                 'amount': position['amount'],
                 'reason': 'FULL_PROFIT_TARGET'
             }
-        elif current_pnl >= self.profit_target:
+        # Take partial profits at 1x target (but let trailing stop manage the rest)
+        elif current_pnl >= self.profit_target and 'partial_profit_taken' not in position:
+            position['partial_profit_taken'] = True
             return {
                 'action': 'SELL',
-                'amount': position['amount'] * 0.5,  # Sell half
+                'amount': position['amount'] * 0.3,  # Sell 30%, trail 70%
                 'reason': 'PARTIAL_PROFIT_TARGET'
             }
+        # Stop loss (only if trailing stop not active)
         elif current_pnl <= self.stop_loss:
             return {
                 'action': 'SELL',
                 'amount': position['amount'],
                 'reason': 'STOP_LOSS'
             }
-        
+
         return {
             'action': 'HOLD',
             'amount': 0,
             'reason': 'NO_SIGNAL'
         }
+
+    def check_risk_limits(self, current_price: float) -> Dict:
+        """Check if any risk limits are breached - returns risk status with circuit breaker logic"""
+        portfolio_value = self.capital + (self.btc_holdings * current_price)
+
+        # Track peak portfolio value for drawdown calculation
+        if not hasattr(self, 'peak_portfolio_value'):
+            self.peak_portfolio_value = portfolio_value
+        else:
+            self.peak_portfolio_value = max(self.peak_portfolio_value, portfolio_value)
+
+        # Calculate current drawdown from peak
+        current_drawdown = (self.peak_portfolio_value - portfolio_value) / self.peak_portfolio_value if self.peak_portfolio_value > 0 else 0
+
+        # Check consecutive losses
+        if not hasattr(self, 'consecutive_losses'):
+            self.consecutive_losses = 0
+
+        recent_trades = self.trade_history[-5:] if len(self.trade_history) >= 5 else self.trade_history
+        if len(recent_trades) >= 3 and all(trade.get('pnl', 0) < 0 for trade in recent_trades):
+            self.consecutive_losses = len(recent_trades)
+        else:
+            self.consecutive_losses = 0
+
+        # Check daily loss limit
+        today = datetime.now().date()
+        if not hasattr(self, 'daily_loss_tracker'):
+            self.daily_loss_tracker = {'date': today, 'loss': 0}
+
+        if self.daily_loss_tracker['date'] != today:
+            self.daily_loss_tracker = {'date': today, 'loss': 0}
+
+        today_trades = [t for t in self.trade_history if datetime.fromisoformat(t['timestamp']).date() == today]
+        daily_pnl = sum(t.get('pnl', 0) for t in today_trades)
+        daily_loss_pct = abs(daily_pnl) / self.initial_capital if daily_pnl < 0 else 0
+
+        # Calculate minimum cash reserve requirement (20% of initial capital)
+        min_cash_reserve = self.initial_capital * 0.20
+
+        # Calculate VaR-based position limit
+        var_95 = self.calculate_var(confidence_level=0.95)
+        current_btc_value = self.btc_holdings * current_price
+
+        # Build risk status dictionary
+        risk_status = {
+            'max_drawdown_breach': current_drawdown > self.max_drawdown,
+            'current_drawdown': current_drawdown,
+            'consecutive_loss_breach': self.consecutive_losses >= 5,
+            'consecutive_losses': self.consecutive_losses,
+            'daily_loss_breach': daily_loss_pct > 0.05,  # 5% daily loss limit
+            'daily_loss_pct': daily_loss_pct,
+            'cash_reserve_breach': self.capital < min_cash_reserve,
+            'current_cash': self.capital,
+            'min_cash_reserve': min_cash_reserve,
+            'var_position_breach': current_btc_value > var_95 * 2 if var_95 > 0 else False,
+            'current_position_value': current_btc_value,
+            'var_limit': var_95 * 2 if var_95 > 0 else float('inf'),
+            'trading_allowed': True,
+            'halt_reason': None
+        }
+
+        # Determine if trading should be halted (circuit breaker logic)
+        if risk_status['max_drawdown_breach']:
+            risk_status['trading_allowed'] = False
+            risk_status['halt_reason'] = f"MAX_DRAWDOWN_BREACH: {current_drawdown:.2%} > {self.max_drawdown:.2%}"
+            logging.error(f"🚨 CIRCUIT BREAKER ACTIVATED: {risk_status['halt_reason']}")
+        elif risk_status['consecutive_loss_breach']:
+            risk_status['trading_allowed'] = False
+            risk_status['halt_reason'] = f"CONSECUTIVE_LOSSES: {self.consecutive_losses} losing trades in a row"
+            logging.error(f"🚨 CIRCUIT BREAKER ACTIVATED: {risk_status['halt_reason']}")
+        elif risk_status['daily_loss_breach']:
+            risk_status['trading_allowed'] = False
+            risk_status['halt_reason'] = f"DAILY_LOSS_LIMIT: {daily_loss_pct:.2%} > 5.0%"
+            logging.error(f"🚨 CIRCUIT BREAKER ACTIVATED: {risk_status['halt_reason']}")
+
+        # Log risk status warnings if approaching limits
+        if current_drawdown > 0.10 or self.consecutive_losses >= 3 or daily_loss_pct > 0.03:
+            logging.warning(f"""
+⚠️  Risk Limit Status Warning:
+  Drawdown: {current_drawdown:.2%} / {self.max_drawdown:.2%} (Limit: 15%)
+  Consecutive Losses: {self.consecutive_losses} / 5 trades
+  Daily Loss: {daily_loss_pct:.2%} / 5.0%
+  Cash Reserve: ${self.capital:,.2f} / ${min_cash_reserve:,.2f}
+  Portfolio Value: ${portfolio_value:,.2f}
+  Peak Value: ${self.peak_portfolio_value:,.2f}
+  Trading Allowed: {risk_status['trading_allowed']}
+""")
+
+        return risk_status
+
+    def calculate_var_adjusted_position_size(self, base_position_size: float, current_price: float) -> float:
+        """Adjust position size based on Value at Risk to limit exposure during volatility"""
+        var_95 = self.calculate_var(confidence_level=0.95)
+
+        if var_95 <= 0:
+            return base_position_size
+
+        portfolio_value = self.capital + (self.btc_holdings * current_price)
+        current_btc_value = self.btc_holdings * current_price
+
+        # VaR tells us potential loss - ensure position doesn't exceed 2x VaR
+        max_position_by_var = var_95 * 2  # Allow position up to 2x the 95% VaR
+
+        # If current position + new position would exceed VaR limit, scale down
+        proposed_position_value = base_position_size
+        total_position_value = current_btc_value + proposed_position_value
+
+        if total_position_value > max_position_by_var:
+            adjustment_factor = max_position_by_var / total_position_value
+            adjusted_position = base_position_size * adjustment_factor
+
+            logging.info(f"""
+VaR Position Adjustment:
+  95% VaR: ${var_95:,.2f}
+  Max Position by VaR: ${max_position_by_var:,.2f}
+  Current BTC Value: ${current_btc_value:,.2f}
+  Proposed Position: ${proposed_position_value:,.2f}
+  Adjusted Position: ${adjusted_position:,.2f}
+  Adjustment Factor: {adjustment_factor:.2%}
+""")
+            return adjusted_position
+
+        return base_position_size
+
+    def calculate_volatility_adjusted_position_size(self, base_position_size: float, current_price: float) -> float:
+        """Adjust position size based on current market volatility"""
+        volatility = self.calculate_volatility()
+
+        if volatility <= 0:
+            return base_position_size
+
+        # Define volatility bands and adjustment factors
+        low_vol = 0.005   # 0.5% - calm market
+        normal_vol = 0.01  # 1% - typical Bitcoin volatility
+        high_vol = 0.02    # 2% - elevated volatility
+        # Above 2% is extreme volatility
+
+        if volatility <= low_vol:
+            # Low volatility - can safely increase position size
+            adjustment = 1.2
+            vol_label = "LOW"
+        elif volatility <= normal_vol:
+            # Normal volatility - no adjustment needed
+            adjustment = 1.0
+            vol_label = "NORMAL"
+        elif volatility <= high_vol:
+            # High volatility - reduce position size for safety
+            adjustment = 0.7
+            vol_label = "HIGH"
+        else:
+            # Extreme volatility - significantly reduce to limit risk
+            adjustment = 0.4
+            vol_label = "EXTREME"
+
+        adjusted_size = base_position_size * adjustment
+
+        logging.info(f"""
+Volatility Position Adjustment:
+  Current Volatility: {volatility:.4%} ({vol_label})
+  Base Position: ${base_position_size:,.2f}
+  Adjustment Factor: {adjustment:.1%}
+  Adjusted Position: ${adjusted_size:,.2f}
+""")
+
+        return adjusted_size
 
     def update_learning_data(self, trade_result: Dict):
         """Update learning data and adjust strategy based on results"""
@@ -2372,30 +2843,32 @@ Success Rate Update:
 """)
 
     def calculate_optimal_position(self, market_condition: str) -> float:
-        """Calculate optimal BTC position based on market conditions"""
+        """Calculate optimal BTC position based on market conditions (capped at 60% max)"""
         if market_condition == 'STRONG_BULLISH':
-            return 0.7  # 70% BTC
+            return 0.60  # 60% BTC (reduced from 70% to respect position limits)
         elif market_condition == 'BULLISH':
-            return 0.5  # 50% BTC
+            return 0.45  # 45% BTC (reduced from 50% for better risk management)
         elif market_condition == 'NEUTRAL':
-            return 0.3  # 30% BTC
-        else:
-            return 0.1  # 10% BTC in bearish conditions
+            return 0.30  # 30% BTC (unchanged)
+        elif market_condition == 'RANGING':
+            return 0.40  # 40% BTC for range trading
+        else:  # BEARISH or STRONG_BEARISH
+            return 0.15  # 15% BTC (increased from 10% to allow small long-term positions)
 
 def main():
     """Main bot loop with enhanced monitoring"""
     bot = BitcoinTradingBot()
     
     logging.info("\n" + "="*50)
-    logging.info("Trading Bot Started")
+    logging.info("🚀 Trading Bot Started - Day Trading Mode (15-min cycles)")
     logging.info(f"Portfolio Value: ${bot.capital + (bot.btc_holdings * bot.fetch_bitcoin_price()):,.2f}")
     logging.info("="*50 + "\n")
-    
-    # More frequent state saving
-    schedule.every(1).minutes.do(bot.display_status)
-    schedule.every(2).minutes.do(bot.execute_trade_decision)
-    schedule.every(3).minutes.do(bot.save_bot_state)  # Save state every 3 minutes
-    schedule.every(1).hours.do(bot.cleanup_old_data)
+
+    # Day trading schedule (aligned with 1.5% profit targets)
+    schedule.every(5).minutes.do(bot.display_status)           # Status every 5 minutes
+    schedule.every(15).minutes.do(bot.execute_trade_decision)  # Trade decisions every 15 minutes (96/day)
+    schedule.every(15).minutes.do(bot.save_bot_state)          # Save state every 15 minutes
+    schedule.every(1).hours.do(bot.cleanup_old_data)           # Cleanup hourly
     
     # Initial actions
     bot.display_status()  # Show initial status
