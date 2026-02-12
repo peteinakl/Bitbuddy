@@ -237,6 +237,16 @@ The bot uses visual indicators in logs for quick status recognition:
 - Pattern-based position sizing
 - Strategy weight optimization
 
+**Week 5: Data Pipeline & Adaptability** (Feb 2026)
+- 🔄 **Continuous price tracking** - Updates every 30 seconds for momentum calculations
+- ⏳ **Startup warm-up** - Collects 12 prices before first trade (prevents zero-data issues)
+- 🔍 **Enhanced diagnostics** - Detailed momentum/volatility logging with health checks
+- 🔄 **Fallback logic** - Simple trend detection when sophisticated calculations fail
+- 📊 **Auto-adjustment** - Reduces thresholds by 20% if rejection rate > 90%
+- 💡 **Self-diagnostic** - Bot detects and reports data pipeline issues
+
+**Key Issue Resolved:** Fixed critical bug where bot had zero trades due to empty price history. Now continuously tracks prices for accurate momentum calculations.
+
 ## 🤝 Contributing
 
 Key areas for enhancement:

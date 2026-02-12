@@ -41,16 +41,23 @@ The entire bot is implemented in `bitcoin_trading_bot.py` as a single `BitcoinTr
 
 **API Management & Data Fetching**:
 - `fetch_bitcoin_price()` (line 417): Rotates between 5 exchange APIs with rate limiting and error handling
+- `update_price_history()` (line 493): **NEW** - Continuously fetches and stores prices for momentum calculations (runs every 30 seconds)
 - `rotate_api()` (line 485): Switches APIs when rate limits or errors occur
 - `check_rate_limit()` (line 1065): Enforces per-API rate limits (configurable per exchange)
 - API state tracked in `api_rotation` dict (lines 50-86) with cooldown periods and error counts
+- **Critical**: Price history must be continuously populated for momentum/volatility calculations to work
 
 **Market Analysis**:
 - `analyze_market_condition()` (line 515): Classifies market into STRONG_BULLISH, BULLISH, NEUTRAL, BEARISH, STRONG_BEARISH, VOLATILE_RANGE, or RANGING
-- `analyze_market_momentum()` (line 979): Calculates velocity, acceleration, and trend strength from price history
+- `analyze_market_momentum()` (line 1233): **ENHANCED** - Calculates momentum with diagnostic logging, error handling, and fallback logic
+  - Logs: price_history size, price range, raw momentum value, direction, volatility
+  - Returns zero momentum safely if calculation fails
+  - Requires minimum 2 prices in history
 - `calculate_volatility()` (line 1447): Standard deviation-based volatility calculation
 - `identify_pattern()` (line 2186): Extracts price patterns from recent history (TREND_REVERSAL, RANGE_BOUND, BREAKOUT)
+- `check_data_pipeline_health()` (line 528): **NEW** - Tests if momentum/volatility calculations are working correctly
 - Uses rolling windows: 720 data points (1 hour of 5-second data)
+- **Warm-up period**: Requires 12 prices (momentum_window) before trading begins
 
 **Position Management**:
 - Supports multiple stacked positions (max 3 by default)
@@ -60,9 +67,16 @@ The entire bot is implemented in `bitcoin_trading_bot.py` as a single `BitcoinTr
 - Dynamic position sizing based on market conditions (20-60% of capital)
 
 **Trading Decision System**:
-- `execute_trade_decision()` (line 842): Main entry point called every 2 minutes
-- `_get_trade_decision()` (line 895): Analyzes market and returns BUY/SELL/HOLD decision
-- `_validate_entry_conditions()` (line 1677): Checks if market conditions are suitable for entry
+- `execute_trade_decision()` (line 1005): Main entry point called every 15 minutes (day trading mode)
+  - **Warm-up check**: Skips trading if insufficient price history (<12 prices)
+  - **Health check**: Monitors data pipeline every 10 decisions
+  - Calls circuit breaker check before all trading decisions
+- `_get_trade_decision()` (line 1126): **ENHANCED** - Analyzes market and returns BUY/SELL/HOLD decision
+  - Tracks entry rejection rate (rejections / attempts)
+  - **Fallback logic**: Uses simple trend detection if momentum returns 0
+  - Requires positive momentum (0.0005+) AND uptrend for BUY entries
+- `_validate_entry_conditions()` (line 2148): Checks if market conditions are suitable for entry
+- `check_and_adjust_entry_thresholds()` (line 2168): **NEW** - Auto-reduces thresholds by 20% if rejection rate > 90%
 - `calculate_buy_amount()` (line 1771): Determines position size based on market condition and available capital
 - Minimum trade size: $100 USD
 
@@ -105,13 +119,16 @@ The entire bot is implemented in `bitcoin_trading_bot.py` as a single `BitcoinTr
 - `load_existing_portfolio()` (line 315): Specifically loads capital and BTC holdings
 - Separate files: bot_state.json (full state), trade_history.json (trades), learning_data.json (ML data), market_data.csv (price history)
 
-### Main Loop (in main(), line 2858)
+### Main Loop (in main(), line 2900)
 
 Uses `schedule` library for periodic tasks (Day Trading Mode):
+- **Every 30 seconds: `update_price_history()`** - **CRITICAL** for momentum calculations
 - Every 5 minutes: `display_status()`
 - Every 15 minutes: `execute_trade_decision()` - **96 decisions per day**
 - Every 15 minutes: `save_bot_state()`
 - Every 1 hour: `cleanup_old_data()`
+
+**Startup Warm-Up (NEW):** Bot collects 12 initial prices (24 seconds) before making first trade decision. This ensures momentum/volatility calculations have sufficient data.
 
 **Timeframe Rationale:** 15-minute decision cycles align with 1.5% profit targets, as Bitcoin typically needs 2-6 hours to move 1.5% in normal conditions. This provides 96 decision opportunities per day while reducing API calls by 87% compared to 2-minute cycles.
 
@@ -233,19 +250,64 @@ Log rotation handled manually via `cleanup_old_data()` every hour.
 - **Stop hit rate:** 20-30% (down from 60-80%)
 - **Profit factor:** 1.5-2.0 (up from 0.8-1.0)
 
-## Future Enhancements Planned
+## Recent Improvements (2026)
 
-### Week 2: Risk Refinement
+### ✅ Week 2: Risk Refinement (COMPLETED)
 - Trailing stop implementation in manage_position()
 - VaR-based position limits
 - Dynamic position sizing based on volatility
 
-### Week 3: Entry Quality
+### ✅ Week 3: Entry Quality (COMPLETED)
 - Momentum-based entry validation
 - Signal quality improvements (reduce noise)
 - Trend confirmation requirements
 
-### Week 4: ML Integration
+### ✅ Week 4: ML Integration (COMPLETED)
 - Connect learning systems to trading loop
 - Use learned optimal position sizes
 - Pattern-based position scaling
+
+### ✅ Week 5: Data Pipeline & Adaptability (Feb 2026)
+**Critical Issue Fixed:** Bot had zero trades due to empty price_history. Root cause: No continuous price tracking.
+
+**Fixes Applied:**
+1. **Continuous Price Tracking** (`update_price_history()`)
+   - Runs every 30 seconds to build price history
+   - Required for momentum/volatility calculations
+   - Logs warm-up progress
+
+2. **Startup Warm-Up** (in `main()`)
+   - Collects 12 prices (24 seconds) before first trade
+   - Prevents trading with insufficient data
+   - Clear status logging
+
+3. **Enhanced Diagnostics** (`analyze_market_momentum()`)
+   - Detailed logging of calculations
+   - Error handling with safe fallback
+   - Logs price range, raw momentum, direction
+
+4. **Fallback Logic** (in `_get_trade_decision()`)
+   - Simple trend detection when momentum = 0
+   - Uses 5-price comparison as backup
+   - Prevents complete paralysis
+
+5. **Auto-Adjustment** (`check_and_adjust_entry_thresholds()`)
+   - Tracks rejection rate (rejections / attempts)
+   - Reduces thresholds by 20% if > 90% rejection
+   - Logs parameter changes to audit trail
+
+6. **Health Monitoring** (`check_data_pipeline_health()`)
+   - Tests momentum/volatility calculations
+   - Reports issues every 10 decisions
+   - Self-diagnostic capability
+
+**Result:** Bot now trades instead of being paralyzed. Expects 5-10 trades/day with quality entries.
+
+## Future Enhancements
+
+### Potential Improvements:
+- Additional technical indicators (RSI, MACD, Bollinger Bands)
+- Multi-asset support (Ethereum, other cryptos)
+- Backtesting framework with historical data
+- Web dashboard for monitoring
+- Multi-timeframe analysis

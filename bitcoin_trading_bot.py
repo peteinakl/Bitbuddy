@@ -490,6 +490,55 @@ class BitcoinTradingBot:
         self.current_api = apis[next_index]
         logging.debug(f"Switched to {self.current_api} API")
 
+    def update_price_history(self):
+        """Continuously fetch and store price data for momentum calculations"""
+        current_price = self.fetch_bitcoin_price()
+        if current_price:
+            timestamp = datetime.now()
+            self.price_history.append((current_price, timestamp))
+
+            # Keep only recent data (last hour)
+            if len(self.price_history) > self.max_price_history:
+                self.price_history = self.price_history[-self.max_price_history:]
+
+            # Log progress during warm-up
+            if len(self.price_history) < self.momentum_window:
+                logging.info(f"🔄 Warming up: {len(self.price_history)}/{self.momentum_window} prices collected")
+
+            logging.debug(f"Price history updated: {len(self.price_history)} prices, latest: ${current_price:,.2f}")
+
+    def check_data_pipeline_health(self) -> Dict:
+        """Check if data pipeline is functioning correctly"""
+        health = {
+            'price_history_ok': len(self.price_history) >= self.momentum_window,
+            'price_history_size': len(self.price_history),
+            'momentum_working': False,
+            'volatility_working': False,
+            'issues': []
+        }
+
+        # Test momentum calculation
+        try:
+            momentum = self.analyze_market_momentum()
+            if momentum['strength'] > 0 or len(self.price_history) < 2:
+                health['momentum_working'] = True
+            else:
+                health['issues'].append("Momentum calculation returning 0")
+        except Exception as e:
+            health['issues'].append(f"Momentum calc error: {str(e)}")
+
+        # Test volatility calculation
+        try:
+            volatility = self.calculate_volatility()
+            if volatility > 0 or len(self.price_history) < 2:
+                health['volatility_working'] = True
+            else:
+                health['issues'].append("Volatility calculation returning 0")
+        except Exception as e:
+            health['issues'].append(f"Volatility calc error: {str(e)}")
+
+        return health
+
     def cleanup_old_data(self):
         """Clean up old data periodically"""
         current_time = time.time()
@@ -497,7 +546,7 @@ class BitcoinTradingBot:
             # Trim price history
             current = datetime.now()
             self.price_history = [
-                x for x in self.price_history 
+                x for x in self.price_history
                 if (current - x[1]).total_seconds() <= 3600
             ]
             self.last_cleanup = current_time
@@ -992,6 +1041,27 @@ Risk Metrics:
         if current_price is None:
             return
 
+        # 🔄 WARM-UP CHECK: Ensure sufficient price history for momentum calculations
+        if len(self.price_history) < self.momentum_window:
+            logging.info(f"⏳ Warm-up mode: {len(self.price_history)}/{self.momentum_window} prices. Skipping trade decision.")
+            self.log_decision('HOLD', {
+                'action': 'HOLD',
+                'amount': 0
+            }, current_price, f'WARMING_UP_{len(self.price_history)}_of_{self.momentum_window}')
+            return
+
+        # 🔍 DATA PIPELINE HEALTH CHECK: Log warnings if calculations are failing
+        # Run this check every 10th decision to avoid spam
+        if not hasattr(self, 'decision_count'):
+            self.decision_count = 0
+        self.decision_count += 1
+
+        if self.decision_count % 10 == 0:
+            health = self.check_data_pipeline_health()
+            if health['issues']:
+                logging.warning(f"⚠️  Data pipeline issues detected: {', '.join(health['issues'])}")
+                logging.warning(f"📊 Pipeline health: {health}")
+
         # 🚨 CRITICAL: Check risk limits FIRST - circuit breaker logic
         risk_status = self.check_risk_limits(current_price)
 
@@ -1102,8 +1172,16 @@ Trade Decision Analysis:
         market_condition = self.analyze_market_condition()
         momentum = self.analyze_market_momentum()
 
+        # Initialize rejection tracking
+        if not hasattr(self, 'entry_rejection_count'):
+            self.entry_rejection_count = 0
+            self.entry_attempt_count = 0
+
         # VALIDATE ENTRY CONDITIONS FIRST - prevent bad entries
         if not self._validate_entry_conditions(market_condition, momentum, current_price):
+            self.entry_rejection_count += 1
+            self.entry_attempt_count += 1
+            self.check_and_adjust_entry_thresholds()
             return {
                 'action': 'HOLD',
                 'amount': 0,
@@ -1123,11 +1201,29 @@ Trade Decision Analysis:
         # MOMENTUM REQUIREMENT FOR ENTRIES
         min_momentum_for_entry = self.momentum_thresholds['medium']  # 0.0005 (0.05%)
 
+        # FALLBACK: If momentum is 0 but we have price history, use simple trend detection
+        if momentum['strength'] == 0 and len(self.price_history) >= 5:
+            recent_prices = [p for p, _ in self.price_history[-5:]]
+            simple_trend_up = recent_prices[-1] > recent_prices[0]
+            simple_momentum_strength = abs(recent_prices[-1] - recent_prices[0]) / recent_prices[0]
+
+            logging.warning(f"⚠️  Momentum calc returned 0, using fallback: trend_up={simple_trend_up}, strength={simple_momentum_strength:.6f}")
+
+            # Override with fallback values
+            momentum = {
+                'strength': simple_momentum_strength,
+                'direction': 'up' if simple_trend_up else 'down',
+                'volatility': 0.01  # Assume moderate volatility
+            }
+
         if abs(btc_difference) > 0.05:  # Only rebalance if difference > 5%
             if btc_difference > 0:  # Need more BTC - BULLISH REBALANCE
                 # REQUIRE POSITIVE MOMENTUM FOR BUYS
                 if momentum['direction'] != 'up' or momentum['strength'] < min_momentum_for_entry:
                     logging.info(f"Buy signal rejected: insufficient momentum (strength={momentum['strength']:.6f}, direction={momentum['direction']})")
+                    self.entry_rejection_count += 1
+                    self.entry_attempt_count += 1
+                    self.check_and_adjust_entry_thresholds()
                     return {
                         'action': 'HOLD',
                         'amount': 0,
@@ -1140,6 +1236,9 @@ Trade Decision Analysis:
                     price_increasing = recent_prices[-1] > recent_prices[0]
                     if not price_increasing:
                         logging.info("Buy signal rejected: price not in uptrend")
+                        self.entry_rejection_count += 1
+                        self.entry_attempt_count += 1
+                        self.check_and_adjust_entry_thresholds()
                         return {
                             'action': 'HOLD',
                             'amount': 0,
@@ -1163,6 +1262,8 @@ Trade Decision Analysis:
 
                 if buy_amount * current_price >= min_trade_value:
                     logging.info(f"Momentum-validated BUY: strength={momentum['strength']:.6f}, multiplier={momentum_multiplier:.2f}")
+                    # Track successful entry (not rejected)
+                    self.entry_attempt_count += 1
                     return {
                         'action': 'BUY',
                         'amount': buy_amount,
@@ -1231,39 +1332,59 @@ Trade Decision Analysis:
         self.update_trade_metrics(trade_result)
 
     def analyze_market_momentum(self) -> Dict:
-        """Analyze market momentum and patterns"""
-        if len(self.price_history) < 2:
+        """Analyze market momentum and patterns with diagnostic logging"""
+        # Diagnostic logging
+        history_len = len(self.price_history)
+        logging.debug(f"Momentum calc: price_history has {history_len} items, need {self.momentum_window}")
+
+        if history_len < 2:
+            logging.warning(f"⚠️  Insufficient price history ({history_len} < 2) - returning zero momentum")
             return {'strength': 0, 'direction': 'neutral', 'volatility': 0}
-        
+
+        # Get recent prices
         recent_prices = [price for price, _ in self.price_history[-self.momentum_window:]]
-        
-        if not recent_prices:
+
+        if not recent_prices or len(recent_prices) < 2:
+            logging.warning(f"⚠️  No recent prices available - returning zero momentum")
             return {'strength': 0, 'direction': 'neutral', 'volatility': 0}
-        
-        # Calculate momentum indicators
-        price_changes = np.diff(recent_prices) / recent_prices[:-1]
-        momentum = sum(price_changes)
-        volatility = np.std(price_changes)
-        
-        # Determine momentum strength and direction
-        strength = abs(momentum)
-        direction = 'up' if momentum > 0 else 'down' if momentum < 0 else 'neutral'
-        
-        momentum_data = {
-            'strength': strength,
-            'direction': direction,
-            'volatility': volatility
-        }
-        
-        # Log detailed momentum analysis
-        self.analysis_logger.info(
-            f"\nMomentum Analysis:"
-            f"\n  Strength: {momentum_data['strength']:.6f}"
-            f"\n  Direction: {momentum_data['direction']}"
-            f"\n  Volatility: {momentum_data['volatility']:.6f}"
-        )
-        
-        return momentum_data
+
+        try:
+            # Calculate momentum indicators
+            price_changes = np.diff(recent_prices) / recent_prices[:-1]
+
+            # Check for valid calculations
+            if len(price_changes) == 0:
+                logging.warning("⚠️  No price changes to calculate momentum")
+                return {'strength': 0, 'direction': 'neutral', 'volatility': 0}
+
+            momentum = sum(price_changes)
+            volatility = np.std(price_changes)
+
+            # Determine momentum strength and direction
+            strength = abs(momentum)
+            direction = 'up' if momentum > 0 else 'down' if momentum < 0 else 'neutral'
+
+            momentum_data = {
+                'strength': strength,
+                'direction': direction,
+                'volatility': volatility
+            }
+
+            # Log detailed momentum analysis
+            self.analysis_logger.info(
+                f"\nMomentum Analysis (from {len(recent_prices)} prices):"
+                f"\n  Raw momentum: {momentum:.8f}"
+                f"\n  Strength: {momentum_data['strength']:.6f}"
+                f"\n  Direction: {momentum_data['direction']}"
+                f"\n  Volatility: {momentum_data['volatility']:.6f}"
+                f"\n  Price range: ${min(recent_prices):,.2f} - ${max(recent_prices):,.2f}"
+            )
+
+            return momentum_data
+
+        except Exception as e:
+            logging.error(f"❌ Error calculating momentum: {str(e)}")
+            return {'strength': 0, 'direction': 'neutral', 'volatility': 0}
 
     def adjust_trading_parameters(self):
         """Adjust trading parameters based on performance"""
@@ -2148,23 +2269,55 @@ Strategy Adjustment Based on Missed Opportunities:
     def _validate_entry_conditions(self, market_condition: str, momentum: Dict, current_price: float) -> bool:
         """Validate entry conditions including time-based factors"""
         current_time = datetime.now()
-        
+
         # Check hour restrictions - only avoid very quiet hours
         if current_time.hour in range(2, 6):  # Most quiet period
             return False
-        
+
         # Check recent price action
         if len(self.price_history) < self.momentum_window:
             return False
-        
+
         recent_prices = [price for price, _ in self.price_history[-5:]]
         price_trend = all(p2 >= p1 for p1, p2 in zip(recent_prices, recent_prices[1:]))
-        
+
         # More stringent conditions only in STRONG_BEARISH markets
         if market_condition == 'STRONG_BEARISH':
             return (momentum['strength'] > self.momentum_thresholds['strong'] and price_trend)
-        
+
         return True
+
+    def check_and_adjust_entry_thresholds(self):
+        """Dynamically adjust entry thresholds if rejection rate is too high"""
+        if not hasattr(self, 'entry_rejection_count'):
+            self.entry_rejection_count = 0
+            self.entry_attempt_count = 0
+
+        # Check every 20 decision attempts
+        if self.entry_attempt_count >= 20 and self.entry_attempt_count % 20 == 0:
+            rejection_rate = self.entry_rejection_count / self.entry_attempt_count
+
+            # If rejecting > 90% of entries, thresholds are too strict
+            if rejection_rate > 0.90:
+                logging.warning(f"⚠️  High rejection rate: {rejection_rate:.1%}. Auto-adjusting thresholds...")
+
+                # Reduce momentum thresholds by 20%
+                for key in self.momentum_thresholds:
+                    old_value = self.momentum_thresholds[key]
+                    self.momentum_thresholds[key] *= 0.8
+
+                    self.log_parameter_change(
+                        f'momentum_threshold_{key}',
+                        old_value,
+                        self.momentum_thresholds[key],
+                        f'High rejection rate: {rejection_rate:.1%}'
+                    )
+
+                logging.info(f"📊 Adjusted momentum thresholds: {self.momentum_thresholds}")
+
+                # Reset counters
+                self.entry_rejection_count = 0
+                self.entry_attempt_count = 0
 
     def update_adaptive_thresholds(self):
         """Update thresholds based on trading performance"""
@@ -2858,18 +3011,29 @@ Success Rate Update:
 def main():
     """Main bot loop with enhanced monitoring"""
     bot = BitcoinTradingBot()
-    
+
     logging.info("\n" + "="*50)
     logging.info("🚀 Trading Bot Started - Day Trading Mode (15-min cycles)")
     logging.info(f"Portfolio Value: ${bot.capital + (bot.btc_holdings * bot.fetch_bitcoin_price()):,.2f}")
     logging.info("="*50 + "\n")
+
+    # CRITICAL: Price history tracking for momentum calculations
+    # Run every 30 seconds to build up price history quickly
+    schedule.every(30).seconds.do(bot.update_price_history)
 
     # Day trading schedule (aligned with 1.5% profit targets)
     schedule.every(5).minutes.do(bot.display_status)           # Status every 5 minutes
     schedule.every(15).minutes.do(bot.execute_trade_decision)  # Trade decisions every 15 minutes (96/day)
     schedule.every(15).minutes.do(bot.save_bot_state)          # Save state every 15 minutes
     schedule.every(1).hours.do(bot.cleanup_old_data)           # Cleanup hourly
-    
+
+    # Initial warm-up: Collect initial price data
+    logging.info("🔄 Starting initial warm-up: collecting price history...")
+    for i in range(bot.momentum_window):
+        bot.update_price_history()
+        time.sleep(2)  # 2 seconds between fetches during warm-up
+    logging.info(f"✅ Warm-up complete: {len(bot.price_history)} prices collected")
+
     # Initial actions
     bot.display_status()  # Show initial status
     bot.execute_trade_decision()  # Check for initial trades
