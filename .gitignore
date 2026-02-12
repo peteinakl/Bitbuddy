@@ -38,6 +38,11 @@ market_data.csv
 trading_metrics.csv
 current_status.txt
 
+# Internal documentation (keep local, not in public repo)
+CLAUDE.md
+FIXES_APPLIED.md
+AUDIT_TRAIL.md
+
 # Sensitive files (if any API keys are added)
 .env
 config.ini
