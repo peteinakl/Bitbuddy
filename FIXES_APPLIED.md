@@ -16,16 +16,16 @@ The bot was running for 21 hours with **ZERO trades** due to broken momentum cal
 
 ### 1. ✅ Added Continuous Price Tracking
 **New method: `update_price_history()`**
-- Fetches and stores prices continuously
-- Builds up price history for momentum calculations
+- Fetches and stores prices every 5 minutes
+- Builds up 1-hour price history window (12 prices) for momentum calculations
 - Logs warm-up progress (e.g., "🔄 Warming up: 8/12 prices collected")
-- Keeps last hour of data (720 points)
+- Aligned with original design: 5-minute intervals, not excessive API calls
 
 ### 2. ✅ Scheduled Price Updates
 **Updated `main()` function**
-- Runs `update_price_history()` every 30 seconds
-- Initial warm-up: Collects 12 prices (24 seconds) before first trade decision
-- Ensures price_history is always populated
+- Runs `update_price_history()` every 5 minutes (not every 30 seconds)
+- Initial warm-up: Collects 12 prices (~2 minutes at 10-second intervals) before first trade decision
+- Ensures price_history is always populated without hammering APIs
 
 ### 3. ✅ Added Warm-Up Check
 **Updated `execute_trade_decision()`**

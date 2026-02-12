@@ -491,13 +491,18 @@ class BitcoinTradingBot:
         logging.debug(f"Switched to {self.current_api} API")
 
     def update_price_history(self):
-        """Continuously fetch and store price data for momentum calculations"""
+        """Fetch and store price data every 5 minutes for momentum calculations
+
+        Maintains 1-hour rolling window (12 prices at 5-min intervals).
+        This provides sufficient data for momentum/volatility calculations
+        without hammering APIs unnecessarily.
+        """
         current_price = self.fetch_bitcoin_price()
         if current_price:
             timestamp = datetime.now()
             self.price_history.append((current_price, timestamp))
 
-            # Keep only recent data (last hour)
+            # Keep only recent data (last hour at 5-min intervals = 12 prices max)
             if len(self.price_history) > self.max_price_history:
                 self.price_history = self.price_history[-self.max_price_history:]
 
@@ -3018,8 +3023,8 @@ def main():
     logging.info("="*50 + "\n")
 
     # CRITICAL: Price history tracking for momentum calculations
-    # Run every 30 seconds to build up price history quickly
-    schedule.every(30).seconds.do(bot.update_price_history)
+    # Run every 5 minutes to build 1-hour history window (12 prices)
+    schedule.every(5).minutes.do(bot.update_price_history)
 
     # Day trading schedule (aligned with 1.5% profit targets)
     schedule.every(5).minutes.do(bot.display_status)           # Status every 5 minutes
@@ -3029,9 +3034,11 @@ def main():
 
     # Initial warm-up: Collect initial price data
     logging.info("🔄 Starting initial warm-up: collecting price history...")
+    logging.info("    This will take ~2 minutes to collect 12 prices at 10-second intervals...")
     for i in range(bot.momentum_window):
         bot.update_price_history()
-        time.sleep(2)  # 2 seconds between fetches during warm-up
+        if i < bot.momentum_window - 1:  # Don't sleep after last one
+            time.sleep(10)  # 10 seconds between fetches during warm-up (total: ~2 minutes)
     logging.info(f"✅ Warm-up complete: {len(bot.price_history)} prices collected")
 
     # Initial actions

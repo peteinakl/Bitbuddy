@@ -41,11 +41,12 @@ The entire bot is implemented in `bitcoin_trading_bot.py` as a single `BitcoinTr
 
 **API Management & Data Fetching**:
 - `fetch_bitcoin_price()` (line 417): Rotates between 5 exchange APIs with rate limiting and error handling
-- `update_price_history()` (line 493): **NEW** - Continuously fetches and stores prices for momentum calculations (runs every 30 seconds)
+- `update_price_history()` (line 493): **NEW** - Fetches and stores prices every 5 minutes for momentum calculations (builds 1-hour window)
 - `rotate_api()` (line 485): Switches APIs when rate limits or errors occur
 - `check_rate_limit()` (line 1065): Enforces per-API rate limits (configurable per exchange)
 - API state tracked in `api_rotation` dict (lines 50-86) with cooldown periods and error counts
-- **Critical**: Price history must be continuously populated for momentum/volatility calculations to work
+- **Critical**: Price history must be populated at 5-minute intervals for momentum/volatility calculations to work
+- **Design**: 12 prices at 5-min intervals = 1-hour rolling window, aligned with day trading timeframe
 
 **Market Analysis**:
 - `analyze_market_condition()` (line 515): Classifies market into STRONG_BULLISH, BULLISH, NEUTRAL, BEARISH, STRONG_BEARISH, VOLATILE_RANGE, or RANGING
@@ -122,13 +123,13 @@ The entire bot is implemented in `bitcoin_trading_bot.py` as a single `BitcoinTr
 ### Main Loop (in main(), line 2900)
 
 Uses `schedule` library for periodic tasks (Day Trading Mode):
-- **Every 30 seconds: `update_price_history()`** - **CRITICAL** for momentum calculations
+- **Every 5 minutes: `update_price_history()`** - **CRITICAL** for momentum calculations (builds 1-hour window)
 - Every 5 minutes: `display_status()`
 - Every 15 minutes: `execute_trade_decision()` - **96 decisions per day**
 - Every 15 minutes: `save_bot_state()`
 - Every 1 hour: `cleanup_old_data()`
 
-**Startup Warm-Up (NEW):** Bot collects 12 initial prices (24 seconds) before making first trade decision. This ensures momentum/volatility calculations have sufficient data.
+**Startup Warm-Up (NEW):** Bot collects 12 initial prices (~2 minutes at 10-second intervals) before making first trade decision. This ensures momentum/volatility calculations have sufficient data without excessive API calls.
 
 **Timeframe Rationale:** 15-minute decision cycles align with 1.5% profit targets, as Bitcoin typically needs 2-6 hours to move 1.5% in normal conditions. This provides 96 decision opportunities per day while reducing API calls by 87% compared to 2-minute cycles.
 
