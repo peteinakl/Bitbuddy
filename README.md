@@ -71,11 +71,10 @@ pip install requests pandas numpy schedule
 - Minimum cash reserve: 20% of initial capital
 
 **Decision Frequency:**
+- Price tracking: Every 5 minutes (builds 1-hour rolling window)
 - Trade decisions: Every 15 minutes (96/day)
 - Status updates: Every 5 minutes
 - State saves: Every 15 minutes
-
-See [CLAUDE.md](CLAUDE.md) for detailed architecture documentation.
 
 ## 🚀 Usage
 
@@ -86,18 +85,19 @@ python bitcoin_trading_bot.py
 ```
 
 The bot will:
-1. Initialize with $10,000 default capital (or load saved state)
-2. Begin monitoring Bitcoin prices every 5-10 seconds
-3. Make trading decisions every 15 minutes
-4. Display portfolio status every 5 minutes
-5. Save state and audit logs automatically
+1. **Warm-up phase (~2 minutes):** Collect 12 initial prices for momentum calculations
+2. **Initialize:** Start with $10,000 in 100% BTC position (or load saved state)
+3. **Price tracking:** Update price history every 5 minutes (1-hour rolling window)
+4. **Trading decisions:** Evaluate momentum and make trades every 15 minutes
+5. **Status updates:** Display portfolio status every 5 minutes
+6. **State persistence:** Auto-save state and audit logs every 15 minutes
 
-The bot will automatically:
-- Initialize with either existing state or default settings
-- Begin monitoring Bitcoin prices
-- Execute trades based on market conditions
-- Save state and performance data
-- Generate performance reports
+Key features:
+- Momentum-based entry validation (requires positive momentum + uptrend)
+- Circuit breakers halt trading at 15% drawdown or 5 consecutive losses
+- Trailing stops protect profits once targets hit
+- Auto-adjusts thresholds if rejection rate exceeds 90%
+- Self-diagnostic health checks for data pipeline
 
 ## Key Components
 
@@ -144,12 +144,7 @@ The bot maintains comprehensive audit trails:
 - `current_status.txt` - Latest status (human-readable)
 - `trading_bot.log` - Detailed runtime logs
 
-See [AUDIT_TRAIL.md](AUDIT_TRAIL.md) for complete audit documentation.
-
-### Configuration Files
-- `CLAUDE.md` - Architecture and development documentation
-- `AUDIT_TRAIL.md` - Audit trail and learning guide
-- `README.md` - This file
+**Note:** All runtime data files are logged with comprehensive details including timestamps, market conditions, momentum data, and decision rationale for post-analysis and learning.
 
 ## Safety Features
 
@@ -271,12 +266,6 @@ The authors are not responsible for any financial losses. Always consult with a 
 ## 📄 License
 
 MIT License - Free to use and modify.
-
-## 📚 Documentation
-
-- [CLAUDE.md](CLAUDE.md) - Complete architecture and development guide
-- [AUDIT_TRAIL.md](AUDIT_TRAIL.md) - Audit trail documentation and learning guide
-- [README.md](README.md) - This file
 
 ---
 
