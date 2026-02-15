@@ -604,13 +604,29 @@ class BitcoinTradingBot:
         try:
             # Calculate pre-trade portfolio value
             portfolio_value_before = self.capital + (self.btc_holdings * price)
-            
+
             # Execute trade
             if action == "BUY":
                 cost = amount * price
                 self.btc_holdings += amount
                 self.capital -= cost
                 entry_price = price
+
+                # Add new position to position stack for tracking
+                new_position = {
+                    'entry_price': price,
+                    'amount': amount,
+                    'timestamp': datetime.now().isoformat(),
+                    'stop_loss': price * (1 + self.stop_loss),  # e.g., price * 0.992 for -0.8%
+                    'profit_target': price * (1 + self.profit_target),  # e.g., price * 1.015 for 1.5%
+                    'active': True,
+                    'highest_price': price,  # For trailing stop
+                    'trailing_stop_price': None,  # Activated when profit target hit
+                    'reason': reason
+                }
+                self.position_stack.append(new_position)
+                logging.info(f"📍 New position added: {amount:.8f} BTC @ ${price:,.2f}, Target: ${new_position['profit_target']:,.2f}, Stop: ${new_position['stop_loss']:,.2f}")
+
             elif action == "SELL":
                 revenue = amount * price
                 self.btc_holdings -= amount
@@ -1173,7 +1189,13 @@ Trade Decision Analysis:
         self.save_bot_state()
 
     def _get_trade_decision(self, current_price: float) -> Dict:
-        """Get trading decision with momentum validation and entry confirmation"""
+        """Get trading decision - ENTRIES ONLY (exits handled by manage_position)
+
+        TRUE POSITION TRADING MODE:
+        - This method ONLY generates BUY signals for new entries
+        - ALL exits (profit targets, stop losses, trailing stops) handled by manage_position()
+        - No rebalancing - positions are held until targets/stops are hit
+        """
         market_condition = self.analyze_market_condition()
         momentum = self.analyze_market_momentum()
 
@@ -1193,15 +1215,26 @@ Trade Decision Analysis:
                 'reason': 'ENTRY_VALIDATION_FAILED'
             }
 
-        # Calculate optimal position based on market condition
-        optimal_btc_position = self.calculate_optimal_position(market_condition)
-        current_btc_value = self.btc_holdings * current_price
-        portfolio_value = self.capital + current_btc_value
-        current_btc_percentage = current_btc_value / portfolio_value if portfolio_value > 0 else 0
+        # Check if we already have maximum positions
+        active_positions = len([p for p in self.position_stack if p.get('active', True)])
+        if active_positions >= self.max_positions:
+            return {
+                'action': 'HOLD',
+                'amount': 0,
+                'reason': 'MAX_POSITIONS_REACHED'
+            }
 
-        # Determine if rebalancing is needed
-        btc_difference = optimal_btc_position - current_btc_percentage
-        min_trade_value = 100  # Minimum trade size in USD
+        # Calculate available capital for new position
+        portfolio_value = self.capital + (self.btc_holdings * current_price)
+        available_capital_pct = self.capital / portfolio_value if portfolio_value > 0 else 0
+
+        # Only open new positions if we have sufficient cash (at least 20%)
+        if available_capital_pct < 0.20:
+            return {
+                'action': 'HOLD',
+                'amount': 0,
+                'reason': 'INSUFFICIENT_CASH_RESERVE'
+            }
 
         # MOMENTUM REQUIREMENT FOR ENTRIES
         min_momentum_for_entry = self.momentum_thresholds['medium']  # 0.0005 (0.05%)
@@ -1221,74 +1254,72 @@ Trade Decision Analysis:
                 'volatility': 0.01  # Assume moderate volatility
             }
 
-        if abs(btc_difference) > 0.05:  # Only rebalance if difference > 5%
-            if btc_difference > 0:  # Need more BTC - BULLISH REBALANCE
-                # REQUIRE POSITIVE MOMENTUM FOR BUYS
-                if momentum['direction'] != 'up' or momentum['strength'] < min_momentum_for_entry:
-                    logging.info(f"Buy signal rejected: insufficient momentum (strength={momentum['strength']:.6f}, direction={momentum['direction']})")
+        # Check for BUY signal based on momentum
+        # Only look for BULLISH or STRONG_BULLISH entries
+        if market_condition in ['BULLISH', 'STRONG_BULLISH', 'RANGING']:
+            # REQUIRE POSITIVE MOMENTUM FOR BUYS
+            if momentum['direction'] != 'up' or momentum['strength'] < min_momentum_for_entry:
+                logging.info(f"Buy signal rejected: insufficient momentum (strength={momentum['strength']:.6f}, direction={momentum['direction']})")
+                self.entry_rejection_count += 1
+                self.entry_attempt_count += 1
+                self.check_and_adjust_entry_thresholds()
+                return {
+                    'action': 'HOLD',
+                    'amount': 0,
+                    'reason': 'INSUFFICIENT_MOMENTUM_FOR_BUY'
+                }
+
+            # ADDITIONAL CONFIRMATION: Check recent price trend
+            if len(self.price_history) >= 5:
+                recent_prices = [p for p, _ in self.price_history[-5:]]
+                price_increasing = recent_prices[-1] > recent_prices[0]
+                if not price_increasing:
+                    logging.info("Buy signal rejected: price not in uptrend")
                     self.entry_rejection_count += 1
                     self.entry_attempt_count += 1
                     self.check_and_adjust_entry_thresholds()
                     return {
                         'action': 'HOLD',
                         'amount': 0,
-                        'reason': 'INSUFFICIENT_MOMENTUM_FOR_BUY'
+                        'reason': 'PRICE_NOT_INCREASING'
                     }
 
-                # ADDITIONAL CONFIRMATION: Check recent price trend
-                if len(self.price_history) >= 5:
-                    recent_prices = [p for p, _ in self.price_history[-5:]]
-                    price_increasing = recent_prices[-1] > recent_prices[0]
-                    if not price_increasing:
-                        logging.info("Buy signal rejected: price not in uptrend")
-                        self.entry_rejection_count += 1
-                        self.entry_attempt_count += 1
-                        self.check_and_adjust_entry_thresholds()
-                        return {
-                            'action': 'HOLD',
-                            'amount': 0,
-                            'reason': 'PRICE_NOT_INCREASING'
-                        }
+            # Calculate position size based on strength and available capital
+            # Use 20-40% of available capital per position
+            base_position_value = self.capital * 0.30  # 30% base
 
-                # Calculate position size with momentum scaling
-                buy_amount_value = btc_difference * portfolio_value
+            # Scale position size by momentum strength (1-2x multiplier)
+            momentum_multiplier = min(2.0, 1.0 + (momentum['strength'] / min_momentum_for_entry))
+            buy_amount_value = base_position_value * momentum_multiplier
 
-                # Scale position size by momentum strength (1-2x multiplier)
-                momentum_multiplier = min(2.0, 1.0 + (momentum['strength'] / min_momentum_for_entry))
-                buy_amount_value *= momentum_multiplier
+            # Cap at 50% of available capital
+            buy_amount_value = min(buy_amount_value, self.capital * 0.50)
 
-                # Apply VaR adjustment to limit position size based on risk
-                adjusted_buy_value = self.calculate_var_adjusted_position_size(buy_amount_value, current_price)
+            # Apply VaR adjustment to limit position size based on risk
+            adjusted_buy_value = self.calculate_var_adjusted_position_size(buy_amount_value, current_price)
 
-                # Apply volatility adjustment to scale position with market conditions
-                adjusted_buy_value = self.calculate_volatility_adjusted_position_size(adjusted_buy_value, current_price)
+            # Apply volatility adjustment to scale position with market conditions
+            adjusted_buy_value = self.calculate_volatility_adjusted_position_size(adjusted_buy_value, current_price)
 
-                buy_amount = adjusted_buy_value / current_price
+            buy_amount = adjusted_buy_value / current_price
 
-                if buy_amount * current_price >= min_trade_value:
-                    logging.info(f"Momentum-validated BUY: strength={momentum['strength']:.6f}, multiplier={momentum_multiplier:.2f}")
-                    # Track successful entry (not rejected)
-                    self.entry_attempt_count += 1
-                    return {
-                        'action': 'BUY',
-                        'amount': buy_amount,
-                        'reason': f'MOMENTUM_ENTRY_{market_condition}_strength_{momentum["strength"]:.6f}'
-                    }
+            min_trade_value = 100  # Minimum trade size in USD
+            if buy_amount * current_price >= min_trade_value:
+                logging.info(f"✅ Momentum-validated BUY ENTRY: strength={momentum['strength']:.6f}, multiplier={momentum_multiplier:.2f}")
+                logging.info(f"   Will hold until profit target ({self.profit_target*100:.1f}%) or stop loss ({self.stop_loss*100:.1f}%)")
+                # Track successful entry (not rejected)
+                self.entry_attempt_count += 1
+                return {
+                    'action': 'BUY',
+                    'amount': buy_amount,
+                    'reason': f'MOMENTUM_ENTRY_{market_condition}_strength_{momentum["strength"]:.6f}'
+                }
 
-            else:  # Need less BTC - BEARISH REBALANCE
-                # SELLS don't require momentum confirmation (risk reduction is always allowed)
-                sell_amount = (-btc_difference * portfolio_value) / current_price
-                if sell_amount * current_price >= min_trade_value:
-                    return {
-                        'action': 'SELL',
-                        'amount': sell_amount,
-                        'reason': f'RISK_REDUCTION_{market_condition}'
-                    }
-
+        # No entry signal
         return {
             'action': 'HOLD',
             'amount': 0,
-            'reason': 'NO_SIGNAL'
+            'reason': 'NO_ENTRY_SIGNAL'
         }
 
     def calculate_pattern_position_size(self, current_price: float, pattern: Dict) -> float:
