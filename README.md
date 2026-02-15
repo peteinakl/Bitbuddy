@@ -6,12 +6,14 @@ A sophisticated Python-based Bitcoin trading bot simulator that allows users to 
 
 ## ✨ Features
 
-### Core Trading
+### Core Trading (Position Trading Mode)
+- **True position trading** - enters on momentum, exits ONLY on profit targets or stop losses
 - **Day Trading Mode:** 15-minute decision cycles aligned with 1.5% profit targets
 - **Real-time Bitcoin price monitoring** from 5 major exchanges (Binance, Kraken, Bitfinex, Bitstamp, CoinGecko)
 - **Momentum-based entry validation** - requires positive momentum + trend confirmation
-- **Trailing stops** - protect profits while letting winners run
-- **Advanced position management** - multiple stacked positions with dynamic sizing
+- **Hold-to-target strategy** - positions held 1-4 hours until targets hit (NO premature exits)
+- **Trailing stops** - activate after profit target hit, protect gains while letting winners run
+- **Advanced position management** - up to 3 concurrent positions with dynamic sizing
 
 ### Risk Management (2026 Updates)
 - 🚨 **Circuit breakers** - halt trading at 15% drawdown, 5 consecutive losses, or 5% daily loss
@@ -196,6 +198,28 @@ The bot provides several monitoring capabilities:
 - Trade analysis
 - Strategy performance metrics
 
+## 📊 Expected Performance (Position Trading Mode)
+
+| Metric | Target | Notes |
+|--------|--------|-------|
+| **Win Rate** | 50-60% | Momentum strategy with confirmed entries |
+| **Trade Frequency** | 3-8/day | Quality over quantity |
+| **Avg Hold Time** | 1-4 hours | Until target/stop hit |
+| **Avg Win** | +1.5% to +3.0% | Profit targets + trailing stops |
+| **Avg Loss** | -0.8% | Stop loss protection |
+| **Max Positions** | 3 concurrent | Risk diversification |
+| **Max Drawdown** | <15% | Circuit breaker limit |
+| **Sharpe Ratio** | 1.2-1.5 | Risk-adjusted returns |
+
+**Trading Pattern:**
+```
+10:00 BUY  @ $70,000 → Target: $71,050 (+1.5%), Stop: $69,440 (-0.8%)
+11:30 SELL @ $71,200 → Profit: +$120 (+1.71%) ✅
+
+14:00 BUY  @ $71,500 → Target: $72,573, Stop: $71,079
+15:45 SELL @ $70,930 → Loss: -$54 (-0.80%) ❌
+```
+
 ## 🎯 Visual Indicators
 
 The bot uses visual indicators in logs for quick status recognition:
@@ -207,6 +231,7 @@ The bot uses visual indicators in logs for quick status recognition:
 - 🧠 = ML learning system update
 - 📊 = Adaptive thresholds updated
 - 💾 = Data saved to disk
+- 📍 = New position opened (tracks entry/target/stop)
 
 ## 🔧 Recent Improvements (2026)
 
@@ -240,7 +265,19 @@ The bot uses visual indicators in logs for quick status recognition:
 - 📊 **Auto-adjustment** - Reduces thresholds by 20% if rejection rate > 90%
 - 💡 **Self-diagnostic** - Bot detects and reports data pipeline issues
 
-**Key Issue Resolved:** Fixed critical bug where bot had zero trades due to empty price history. Now tracks prices at 5-minute intervals for accurate momentum calculations without excessive API calls.
+**Week 6: Position Trading Strategy** (Feb 15, 2026) 🚀
+- 🎯 **CRITICAL FIX:** Converted from rebalancing to true position trading
+- ❌ **Removed:** All "RISK_REDUCTION" automatic sells that caused premature exits
+- ✅ **Implemented:** Hold-to-target strategy - positions held until profit target (+1.5%) or stop loss (-0.8%)
+- 📊 **Entry-only decisions:** Trading logic now only generates BUY signals for new positions
+- 🎯 **Exit management:** ALL exits handled by position management (targets/stops/trailing stops)
+- 💰 **Position tracking:** Each BUY creates tracked position with defined targets and stops
+- ⏱️ **Hold time:** Positions now held 1-4 hours (not 15-30 minutes)
+- 🔒 **Max positions:** Limited to 3 concurrent positions with 20% cash reserve
+
+**Problem Solved:** Bot had 10% "win rate" because 100% of trades showed `pnl: $0` due to immediate rebalancing. Now positions are held to completion, capturing actual profits and losses. Expected: 50-60% real win rate with 3-8 quality trades per day instead of 25-50 worthless rebalancing trades.
+
+See `STRATEGY_CHANGE.md` for complete technical analysis.
 
 ## 🤝 Contributing
 
