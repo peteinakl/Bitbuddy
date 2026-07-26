@@ -1,136 +1,160 @@
 # Bitcoin Trading Bot Simulator
 
-A Python Bitcoin trading simulator with a **backtest-first** workflow: strategies are measured on years of real market data with realistic costs before they are allowed to run, and the live paper trader shares its strategy code with the backtester so that what gets validated is what actually runs.
+A Python Bitcoin trading simulator with a **backtest-first** workflow: strategies are measured across 9 years of real market data with realistic costs before they run, and the live paper trader shares its strategy code with the backtester so what gets validated is what actually runs.
 
-**⚠️ This is a SIMULATION.** No real money is traded, no exchange credentials are used, no orders are placed. Nothing here is financial advice.
+**⚠️ This is a SIMULATION.** No real money, no exchange credentials, no orders placed. Nothing here is financial advice.
 
 ## Why this exists
 
-The original version of this bot traded on 1-hour momentum with a fixed 1.5% profit target and a -0.8% stop, and reported its own results using a P&L calculation that was structurally always zero — so it could not tell whether it was winning or losing.
+The original bot traded 1-hour momentum with a fixed 1.5% target and -0.8% stop, and computed its own P&L as portfolio-value delta across a cash↔BTC conversion — a quantity that is zero by construction, so it could not tell winning from losing.
 
-When those rules were backtested honestly against 3.6 years of BTC data with fees and slippage, they lost **99.2%** of capital. Fees alone consumed 91% of the starting balance across 4,972 trades.
+Backtested honestly with fees and slippage, those rules lose **99.2%** of capital. Fees alone consumed 91% of the starting balance across 4,972 trades.
 
-That measurement is what the current design is a response to.
+Everything here is a response to that measurement.
 
-## Measured results
+## Results
 
-3.6 years of BTCUSDT, 2023-01-01 → 2026-07-26. Costs: 0.1% fee per side plus slippage (0.22% round trip). Signals are taken from a bar's close and filled at the **next** bar's open, so no lookahead.
+9 years of BTCUSDT daily bars, 2017-08-17 → 2026-07-26. Costs 0.22% round trip. Signals from a bar's close fill at the **next** bar's open, so no lookahead.
 
-| | return | CAGR | max DD | Sharpe | Calmar | trades | exposure |
-|---|---|---|---|---|---|---|---|
-| **current strategy** | **+157.7%** | +37.1% | **-27.4%** | **1.19** | **1.35** | 29 | 48% |
-| buy & hold | +288.4% | +46.3% | -53.0% | 1.05 | 0.87 | — | 100% |
-| original bot's rules | **-99.2%** | -74.0% | -99.3% | -6.72 | — | 4,972 | 100% |
+| | return | CAGR | max DD | Sharpe | Calmar | exposure |
+|---|---|---|---|---|---|---|
+| **shipped strategy** | +801% | 31.2% | **-29%** | **1.18** | **1.07** | 35% |
+| higher-risk variant | **+1759%** | 39.2% | -41% | 1.19 | 0.94 | 51% |
+| buy & hold | +1406% | 35.4% | -83% | 0.79 | — | 100% |
+| original bot's rules | **-99.2%** | -74.0% | -99.3% | -6.72 | — | 100% |
 
-Split by regime:
-
-| period | strategy | buy & hold |
-|---|---|---|
-| bull 2023-01 → 2025-06 | +168.7% | +544.8% |
-| bear 2025-07 → 2026-07 | **-3.1%** | **-38.9%** |
-
-**Out-of-sample walk-forward** — parameters chosen only on prior data, applied to the next unseen 6 months, stitched together (2024-07 → 2026-06):
+**True out-of-sample walk-forward, 2020-08 → 2026-07** — parameters chosen only on prior data, applied forward, stitched:
 
 | | return | CAGR | max DD | Sharpe |
 |---|---|---|---|---|
-| fixed parameters | **+34.9%** | +16.2% | **-18.0%** | 0.72 |
-| refit each window | +30.6% | +14.3% | -20.1% | 0.66 |
-| buy & hold | -6.8% | — | -53.0% | 0.15 |
+| fixed parameters | **+1014%** | 50.1% | **-39%** | **0.88** |
+| refit each window | +614% | 39.2% | -47% | 0.75 |
+| buy & hold | +424% | 32.2% | -77% | 0.77 |
 
-Fixed parameters beating per-window refitting is the useful signal here: the edge is structural rather than curve-fit, so the shipped configuration is the conventional 50/200 one rather than a tuned one.
+Fixed parameters beating refitting is the important signal: the parameter surface is mostly noise and the edge is structural, so the simple conventional config ships.
+
+**Per calendar year (%)** — the strategy sits bears out rather than fighting them:
+
+| | 2018 | 2019 | 2020 | 2021 | 2022 | 2023 | 2024 | 2025 | 2026 |
+|---|---|---|---|---|---|---|---|---|---|
+| shipped | **-7** | +32 | +360 | +34 | **-1** | +48 | +49 | **0** | **0** |
+| buy & hold | -72 | +89 | +302 | +58 | -65 | +154 | +112 | -7 | -27 |
 
 ### Read this before getting excited
 
-- **It does not beat buy & hold on raw return.** Over a window where BTC rose 4x, a long-only spot strategy essentially cannot. The edge is risk-adjusted: better Sharpe and Calmar, roughly half the drawdown, and only 48% time in market.
-- **It cannot profit from a downtrend**, only sit one out. Long or flat, no shorting, no leverage.
-- **29 trades is a small sample.** One asset, one market cycle. Treat the numbers as indicative.
-- **A 28% win rate is normal here.** Three trades produced nearly all the profit (+53%, +53%, +48%) against many small losses. That is what trend following looks like, and it is why a fixed profit target is so damaging — it caps exactly the trades that pay for everything else.
+- **It loses to buy & hold on raw return** (+801% vs +1406%). It wins on drawdown (-29% vs -83%), Sharpe and Calmar, holding a position only 35% of the time. A long-only spot strategy on an asset that rose 14x cannot beat holding it on raw return; the win is risk-adjusted.
+- **It cannot profit from a downtrend**, only avoid one. Long or flat, no shorting, no leverage.
+- **76 trades in 9 years.** Small sample. Treat point estimates as indicative.
+- **Roughly 40% win rate is normal.** A handful of trades produce nearly all the profit. That is what trend following is, and it is why the original bot's fixed 1.5% target was so damaging — it capped exactly the trades that pay for everything else.
+- One asset, three cycles. The cleanest remaining test is running these rules on ETH/SOL.
 
 ## Strategy
 
-`VolTargetTrendStrategy` on daily bars — long/flat trend following.
+`DualMomentum(lookback=30, slow_ma=300, exit_ma=20, target_vol=0.4, stop_atr=8.0)` on daily bars.
 
-- **Entry** — close > EMA200, EMA50 > EMA200, and close > EMA50
-- **Exit** — close < EMA50, a regime flip, or an 8×ATR disaster stop
-- **Size** — `min(target_vol / realized_vol, 0.95)` of equity, so position size shrinks as volatility rises
+- **Entry** — 30-day return > 0, close > EMA300, close > EMA20
+- **Exit** — close < EMA20, momentum turning negative below EMA300, or an 8×ATR crash stop
+- **Size** — `min(0.4 / realized_vol, 0.95)` of equity, so exposure shrinks as volatility rises
 
-Four design choices, each measured rather than assumed:
+Trade characteristics: **36% win rate**, profit factor 2.44, average win +19.4% against average loss -3.2%. The top 3 trades produced **74%** of all net profit — which is exactly why the original bot's fixed 1.5% target was fatal, since it capped the trades that pay for everything else.
 
-1. **Two-condition regime gate.** Requiring the moving-average structure to be bullish (not just price above a line) keeps the bot completely flat through sustained bear markets — 0 trades in H1 2026 while BTC fell 34%. Removing the confirmation turns the bear period from -3.1% into -10.7%.
-2. **No profit target.** Trend following pays from a handful of large moves; capping them removes the edge.
-3. **ATR-based stops, not percentage stops.** BTC's hourly volatility is ~0.5%, so the original -0.8% stop sat 1.6 sigma away and was triggered by noise. This stop is wide and fires only on crashes.
-4. **Low turnover.** 29 trades in 3.6 years, and the edge survives **4× the assumed costs** (Sharpe 0.98). The original strategy died of fees.
+Robustness, all measured:
+
+- **80/80** neighbouring configurations profitable on development data (Sharpe median 1.07, min 0.73) — a plateau, not a spike
+- Survives **4× assumed costs** (+509% full period), because it only trades ~8 times a year
+
+### The Sharpe ceiling, and choosing your point on it
+
+Ablating the two signals reveals something more useful than a single winner:
+
+| variant | return | max DD | Sharpe | Calmar |
+|---|---|---|---|---|
+| momentum only (`TsMomentum 30`) | **+2242%** | -52% | 1.17 | 0.83 |
+| `MaTrend 20/30` no confirmation | +1759% | -41% | 1.19 | 0.94 |
+| **both (shipped `DualMomentum`)** | +801% | **-29%** | 1.18 | **1.07** |
+| buy & hold | +1406% | -83% | 0.79 | — |
+
+Every trend variant lands at **Sharpe ~1.17-1.19**. They are not better or worse than each other in risk-adjusted terms — they are the *same edge* dialled to different exposure. What you actually choose is how much drawdown to accept: -29% for +801%, or -52% for +2242%.
+
+So "momentum alone is worse" would be false. It earns nearly 3x more; it just hurts more on the way. The shipped config maximises Calmar (return per unit of drawdown) per the risk-adjusted objective. Both alternatives are one-line switches to `STRATEGY`/`STRATEGY_PARAMS` in `bitbuddy/live/trader.py`.
 
 ## Install
 
 ```bash
 pip install -r requirements.txt
-python fetch_data.py            # downloads history into data/ (~375k bars, ~2 min)
+python fetch_data.py --interval 1d        # ~3,300 bars back to Binance's 2017 listing
 ```
 
 ## Usage
 
-Paper trading:
-
 ```bash
-python live_trader.py --once      # evaluate the latest completed daily bar
-python live_trader.py --loop      # run continuously, one decision per day
-python live_trader.py --status    # portfolio state
-python live_trader.py --replay    # verify live logic reproduces the backtest
+# paper trading
+python live_trader.py --once              # evaluate the latest completed bar
+python live_trader.py --loop              # one decision per day
+python live_trader.py --status
+python live_trader.py --replay            # verify live logic reproduces the backtest
+
+# research
+python optimise.py                        # search families with a held-out block
+python validate.py                        # finalist comparison + robustness
+python validate.py --check wf             # walk-forward only
+
+# tests
+python tests/test_engine.py               # engine honesty: 8 groups
+python tests/test_live.py                 # live accounting + replay: 6 groups
 ```
 
-Research:
-
-```bash
-python compare.py                    # strategies vs buy & hold, by regime
-python compare.py --include-legacy   # include the original bot's rules
-python validate.py                   # walk-forward, sensitivity, cost shock
-python sweep.py --strategy voltarget --timeframe 1D
-python run_backtest.py --strategy legacy
-```
-
-Tests:
-
-```bash
-python test_backtest.py       # engine accounting (no lookahead, costs, conservation)
-python test_live_trader.py    # live accounting, persistence, backtest agreement
-```
-
-## How it fits together
-
-One strategy implementation, two consumers:
+## Architecture
 
 ```
-strategies.py  ──┬──  backtest.py   (research: sweep, compare, validate)
-                 └──  live_trader.py (paper trading)
+bitbuddy/
+  data.py         load / resample / download bars
+  costs.py        fee + slippage model
+  indicators.py   causal numpy primitives
+  engine.py       backtest engine (Backtester, Context, make_context)
+  metrics.py      Result: returns, Sharpe/Sortino/Calmar, ulcer, exposure
+  strategies/     MaTrend, TsMomentum, DualMomentum, Donchian, LegacyBot
+  research/       walk-forward, parameter search
+  live/           portfolio accounting, simulated broker, live loop
 ```
 
-`live_trader.py --replay` runs the live decision path over history and asserts it matches the backtester — currently within 0.001% on final equity with identical trade counts. Run it after touching strategy or execution code; it is what stops the two paths silently diverging.
+One strategy implementation feeds both the backtester and the live trader through the same `make_context()`. `live_trader.py --replay` asserts they agree over the full history — currently **0.009%** on final equity with identical trade counts. It is what stops the two paths silently diverging.
+
+The engine runs at ~544k bars/s because strategies receive numpy arrays rather than DataFrame rows, which is what makes searching thousands of configurations practical.
 
 ### Backtest honesty
 
-The engine is deliberately pessimistic, because the default failure mode of a backtest is inventing profit:
+The engine is deliberately pessimistic, since the default failure mode of a backtest is inventing profit:
 
 - **No lookahead** — a signal from bar *i*'s close fills at bar *i+1*'s open
-- **Costs always charged** — fee per side plus slippage; stop exits pay extra, since they are market orders into a move already against you
-- **Pessimistic intrabar ordering** — if a bar's range contains both stop and target, the stop is taken
-- **No leverage** — the engine refuses to spend cash it does not have
+- **Costs always charged** — fee per side plus slippage, extra on stop exits
+- **Pessimistic intrabar ordering** — a bar spanning both stop and target takes the stop
+- **No leverage** — the engine refuses to spend cash it does not hold
+- **Conservation** — final equity equals initial plus the sum of net P&L, exactly
 
-`test_backtest.py` asserts each of these.
+`tests/test_engine.py` asserts each one.
+
+### Selection protocol
+
+```
+2017-08 ───────── development ───────── 2024-07 ──── holdout ──── 2026-07
+          all searching and selection            scored once at the end
+```
+
+Within development, configurations are ranked by **median Sharpe across consecutive blocks** — aggregate performance rewards a config that made all its money in one regime — subject to a hard aggregate-drawdown constraint. The holdout is scored only after selection is final.
+
+If you change the strategy, show `validate.py` output. An improvement that appears in-sample but not in walk-forward is overfitting, and the holdout stops being a holdout the moment parameters are chosen against it.
 
 ## Project layout
 
-| file | role |
+| path | role |
 |---|---|
-| `strategies.py` | strategy implementations, shared by backtest and live |
-| `backtest.py` | event-driven engine, cost model, metrics |
-| `live_trader.py` | paper trading: portfolio, broker, persistence |
+| `bitbuddy/` | the package (see above) |
+| `tests/` | engine and live test suites |
 | `fetch_data.py` | historical data download |
-| `compare.py` | head-to-head vs buy & hold by period |
-| `validate.py` | walk-forward, parameter sensitivity, cost shock |
-| `sweep.py` | parameter grids with train/test split |
-| `run_backtest.py` | single-strategy runs |
-| `test_backtest.py`, `test_live_trader.py` | test suites |
+| `optimise.py` | strategy/parameter search |
+| `validate.py` | robustness validation |
+| `live_trader.py` | paper-trading CLI |
 | `bitcoin_trading_bot.py` | **superseded** original bot, kept for reference |
 
 Runtime files (`data/`, `live_state.json`, `live_trades.json`, `live_decisions.json`, logs) are gitignored.
@@ -139,12 +163,10 @@ Runtime files (`data/`, `live_state.json`, `live_trades.json`, `live_decisions.j
 
 Genuinely useful directions:
 
-- **Multi-asset.** Trend following works better across several instruments than on one; it is also the cleanest test of whether this edge is real or fitted to BTC.
-- **Short side.** The 2026 decline is unexploitable as-is. Adding shorts needs perpetual futures, which means modelling funding rates and liquidation honestly.
-- **More history.** 2017-2022 would add two more cycles and materially strengthen the walk-forward evidence.
+- **Multi-asset.** Trend following works better across instruments than on one, and it is the cleanest test of whether this edge is real or fitted to BTC.
+- **Short side.** Downtrends are unexploitable as-is. Adding shorts needs perpetual futures, so funding rates and liquidation must be modelled honestly.
 - **Regime-aware sizing** beyond simple volatility targeting.
-
-If you change the strategy, show `validate.py` output. An improvement that appears in-sample but not out-of-sample is overfitting, and the walk-forward block stops being out-of-sample the moment parameters are chosen against it.
+- **Execution realism** — order-book depth, partial fills, exchange downtime.
 
 ## Disclaimer
 

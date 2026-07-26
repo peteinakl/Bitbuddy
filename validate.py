@@ -1,270 +1,215 @@
-"""Robustness validation for the long-only trend strategy.
+"""Validate finalist configurations before shipping one.
 
-Four independent checks, each able to kill the strategy on its own:
+Finalists were selected on development-set statistics only (see optimise.py).
+The holdout appears here for confirmation, never for selection.
 
-1. **Rolling walk-forward.** Parameters are re-chosen on each training window and
-   applied to the next unseen window; the out-of-sample slices are stitched into
-   one equity curve. This is the closest thing to an honest "what would have
-   happened" answer.
-
-2. **Fixed vs refitted parameters.** The same walk-forward run with one fixed,
-   conventional parameter set (50/200). If fixed does as well as refitted, the
-   edge is structural rather than fitted -- which is the good outcome, and argues
-   for shipping the simpler configuration.
-
-3. **Parameter sensitivity.** Performance across the neighbourhood of the chosen
-   values. A broad plateau means the result survives being slightly wrong; a
-   lone spike means it was curve-fit.
-
-4. **Cost shock.** Re-run at 2x and 4x the assumed fees. An edge that evaporates
-   when costs rise was never an edge, it was a rebate on optimism.
+Checks:
+    1. Head-to-head across development, holdout, full period
+    2. Per-calendar-year, so a single lucky regime cannot hide
+    3. Parameter sensitivity around each finalist
+    4. Cost shock at 1x/2x/4x/8x
+    5. Refit vs fixed walk-forward
 
 Usage:
-    python validate.py                 # all checks
-    python validate.py --check wf
+    python validate.py
+    python validate.py --check sens
 """
 
 import argparse
-import itertools
-from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
 
-from backtest import Backtester, Costs, load_bars
-from strategies import VolTargetTrendStrategy
+from bitbuddy.costs import Costs
+from bitbuddy.data import load_bars, slice_bars
+from bitbuddy.research.search import grid
+from bitbuddy.research.walkforward import (curve_stats, evaluate, split_blocks,
+                                           stitch, walk_forward_refit)
+from bitbuddy.strategies import DualMomentum, MaTrend
 
-# Neighbourhood explored when refitting. Deliberately coarse: a fine grid on
-# ~3 years of daily bars would fit noise.
-GRID = list(itertools.product(
-    [20, 30, 50, 80],     # fast_ma
-    [100, 150, 200],      # slow_ma
-    [30, 50, 80],         # exit_ma
-))
-GRID = [p for p in GRID if p[1] > p[0]]
+DEV_END = "2024-07-01"
+FIXED = {"stop_atr": 8.0, "atr_period": 14, "vol_window": 30, "interval": "1d"}
 
-FIXED = (50, 200, 50)
-
-
-def resample(df, rule="1D"):
-    return (
-        df.set_index("timestamp")
-        .resample(rule)
-        .agg({"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"})
-        .dropna()
-        .reset_index()
-    )
+# Selected on development statistics only.
+FINALISTS = {
+    "A dualmom 30/300/20 vt0.4": lambda: DualMomentum(
+        lookback=30, slow_ma=300, exit_ma=20, target_vol=0.4, **FIXED),
+    "B matrend 20/30 noconfirm vt0.4": lambda: MaTrend(
+        entry_ma=20, exit_ma=30, slow_ma=200, confirm=False, target_vol=0.4, **FIXED),
+    "C matrend 50/50/200 confirm vt0.5 (shipped)": lambda: MaTrend(
+        entry_ma=50, exit_ma=50, slow_ma=200, confirm=True, target_vol=0.5, **FIXED),
+}
 
 
-def make(params, target_vol=0.5):
-    fast, slow, ex = params
-    return lambda: VolTargetTrendStrategy(fast_ma=fast, slow_ma=slow, exit_ma=ex,
-                                          target_vol=target_vol)
-
-
-def run_window(
-    bars: pd.DataFrame,
-    params: Tuple,
-    costs: Costs,
-    trade_start: Optional[pd.Timestamp] = None,
-    trade_end: Optional[pd.Timestamp] = None,
-    equity: float = 10_000.0,
-):
-    """Backtest with full history for warmup but trading confined to a window."""
-    sub = bars
-    if trade_end is not None:
-        sub = bars[bars["timestamp"] < trade_end].reset_index(drop=True)
-    bt = Backtester(sub, make(params)(), costs, initial_equity=equity,
-                    bar_interval="1D", trade_start=trade_start)
-    return bt.run()
-
-
-def metrics(r) -> Dict:
-    return {"ret": r.total_return, "dd": r.max_drawdown, "sharpe": r.sharpe,
-            "calmar": r.calmar, "n": len(r.trades)}
-
-
-def bh_over(bars, start, end) -> Dict:
-    m = (bars["timestamp"] >= start) & (bars["timestamp"] < end)
-    c = bars.loc[m, "close"].reset_index(drop=True)
-    if len(c) < 2:
-        return {"ret": 0.0, "dd": 0.0, "sharpe": 0.0}
-    ts = pd.DatetimeIndex(bars.loc[m, "timestamp"])
-    curve = pd.Series((c / c.iloc[0]).values, index=ts)
+def bh(bars, start=None, end=None):
+    d = slice_bars(bars, start, end)
+    c = d.set_index("timestamp")["close"]
+    curve = c / c.iloc[0]
     daily = curve.resample("D").last().dropna().pct_change(fill_method=None).dropna()
+    years = (c.index[-1] - c.index[0]).total_seconds() / (365.25 * 86400)
+    total = float(curve.iloc[-1] - 1)
     return {
-        "ret": float(curve.iloc[-1] - 1),
+        "ret": total, "cagr": (1 + total) ** (1 / years) - 1 if years > 0 else 0,
         "dd": float((curve / curve.cummax() - 1).min()),
-        "sharpe": float(daily.mean() / daily.std() * np.sqrt(365)) if daily.std() > 0 else 0.0,
+        "sharpe": float(daily.mean() / daily.std() * np.sqrt(365)) if daily.std() else 0,
+        "n": 0, "exposure": 1.0,
     }
 
 
-# ---------------------------------------------------------------------------
-# 1 + 2. walk-forward
-# ---------------------------------------------------------------------------
-def walk_forward(bars, costs, train_months=18, test_months=6, refit=True, verbose=True):
-    start = bars["timestamp"].iloc[0]
-    end = bars["timestamp"].iloc[-1]
-
-    windows = []
-    test_start = start + pd.DateOffset(months=train_months)
-    while test_start < end:
-        test_end = min(test_start + pd.DateOffset(months=test_months), end)
-        if (test_end - test_start).days < 60:
-            break
-        windows.append((test_start - pd.DateOffset(months=train_months), test_start, test_end))
-        test_start = test_end
-
-    stitched = 1.0
-    curve_parts: List[pd.Series] = []
-    rows = []
-
-    for train_start, ts, te in windows:
-        if refit:
-            best, best_score = None, -1e9
-            for p in GRID:
-                r = run_window(bars, p, costs, trade_start=train_start, trade_end=ts)
-                if len(r.trades) < 3:
-                    continue          # too few trades to judge
-                score = r.sharpe
-                if score > best_score:
-                    best, best_score = p, score
-            if best is None:
-                best = FIXED
-        else:
-            best = FIXED
-
-        r = run_window(bars, best, costs, trade_start=ts, trade_end=te)
-        m = metrics(r)
-        bh = bh_over(bars, ts, te)
-        rows.append({"test": f"{ts.date()} → {te.date()}", "params": best,
-                     "oos": m, "bh": bh})
-        # Chain the window's return onto the stitched curve
-        seg = r.equity / r.equity.iloc[0] * stitched
-        curve_parts.append(seg)
-        stitched = float(seg.iloc[-1])
-
-        if verbose:
-            tag = f"{best[0]}/{best[1]}/{best[2]}"
-            print(f"  {ts.date()} → {te.date()}  params {tag:<12} "
-                  f"OOS {m['ret']*100:>+7.1f}%  dd {m['dd']*100:>6.1f}%  "
-                  f"shp {m['sharpe']:>5.2f}  n={m['n']:<3} | B&H {bh['ret']*100:>+7.1f}%")
-
-    curve = pd.concat(curve_parts) if curve_parts else pd.Series(dtype=float)
-    curve = curve[~curve.index.duplicated(keep="last")]
-    return rows, curve
+def row(label, m):
+    return (f"  {label:<44}{m['ret'] * 100:>9.0f}%{m['cagr'] * 100:>8.1f}%"
+            f"{m['dd'] * 100:>8.0f}%{m['sharpe']:>8.2f}"
+            f"{m.get('calmar', 0):>8.2f}{m['n']:>6}{m['exposure'] * 100:>8.0f}%")
 
 
-def curve_stats(curve: pd.Series) -> Dict:
-    if len(curve) < 2:
-        return {"ret": 0.0, "dd": 0.0, "sharpe": 0.0, "cagr": 0.0}
-    daily = curve.resample("D").last().dropna().pct_change(fill_method=None).dropna()
-    years = (curve.index[-1] - curve.index[0]).total_seconds() / (365.25 * 86400)
-    total = float(curve.iloc[-1] / curve.iloc[0] - 1)
-    return {
-        "ret": total,
-        "cagr": (1 + total) ** (1 / years) - 1 if years > 0 else 0.0,
-        "dd": float((curve / curve.cummax() - 1).min()),
-        "sharpe": float(daily.mean() / daily.std() * np.sqrt(365)) if daily.std() > 0 else 0.0,
-    }
+def head(title):
+    print(f"\n{title}")
+    print(f"  {'':<44}{'return':>10}{'CAGR':>8}{'maxDD':>8}{'Sharpe':>8}{'Calmar':>8}"
+          f"{'n':>6}{'expo':>8}")
+    print("  " + "-" * 100)
 
 
-def check_walk_forward(bars, costs):
-    print("\n" + "=" * 96)
-    print("1. ROLLING WALK-FORWARD  (parameters refit on each 18m train, applied to next 6m)")
-    print("=" * 96)
-    rows_refit, curve_refit = walk_forward(bars, costs, refit=True)
-
-    print("\n" + "=" * 96)
-    print(f"2. SAME WINDOWS, FIXED PARAMETERS {FIXED[0]}/{FIXED[1]}/{FIXED[2]} (no refitting)")
-    print("=" * 96)
-    rows_fixed, curve_fixed = walk_forward(bars, costs, refit=False)
-
-    if len(curve_refit) and len(curve_fixed):
-        a, b = curve_stats(curve_refit), curve_stats(curve_fixed)
-        first = curve_refit.index[0]
-        last = curve_refit.index[-1]
-        bh = bh_over(bars, first, last + pd.Timedelta(days=1))
-        print(f"\nStitched out-of-sample, {first.date()} → {last.date()}:")
-        print(f"{'':<26}{'return':>10}{'CAGR':>9}{'maxDD':>9}{'Sharpe':>8}")
-        print("-" * 62)
-        print(f"{'refitted per window':<26}{a['ret']*100:>9.1f}%{a['cagr']*100:>8.1f}%"
-              f"{a['dd']*100:>8.1f}%{a['sharpe']:>8.2f}")
-        print(f"{'fixed 50/200/50':<26}{b['ret']*100:>9.1f}%{b['cagr']*100:>8.1f}%"
-              f"{b['dd']*100:>8.1f}%{b['sharpe']:>8.2f}")
-        print(f"{'buy & hold':<26}{bh['ret']*100:>9.1f}%{'':>9}{bh['dd']*100:>8.1f}%{bh['sharpe']:>8.2f}")
-    return curve_refit, curve_fixed
+def check_headline(bars, costs):
+    print("=" * 104)
+    print("1. HEAD-TO-HEAD")
+    print("=" * 104)
+    for title, (s, e) in [
+        (f"development  2017-08 → {DEV_END[:7]}  (selection happened here)", (None, DEV_END)),
+        (f"holdout      {DEV_END[:7]} → 2026-07  (confirmation only)", (DEV_END, None)),
+        ("full         2017-08 → 2026-07", (None, None)),
+    ]:
+        head(title)
+        for name, factory in FINALISTS.items():
+            r = evaluate(bars, factory, costs, "1d", s, e)
+            print(row(name, r.as_dict()))
+        print(row("buy & hold", bh(bars, s, e)))
 
 
-# ---------------------------------------------------------------------------
-# 3. parameter sensitivity
-# ---------------------------------------------------------------------------
+def check_years(bars, costs):
+    print("\n" + "=" * 104)
+    print("2. PER CALENDAR YEAR  (return %, so one good regime cannot hide)")
+    print("=" * 104)
+    years = sorted({t.year for t in bars["timestamp"]})
+    hdr = "  " + f"{'':<44}" + "".join(f"{y:>7}" for y in years)
+    print(hdr)
+    print("  " + "-" * (44 + 7 * len(years)))
+    for name, factory in FINALISTS.items():
+        cells = []
+        for y in years:
+            r = evaluate(bars, factory, costs, "1d", f"{y}-01-01", f"{y + 1}-01-01")
+            cells.append(f"{r.total_return * 100:>+7.0f}")
+        print(f"  {name:<44}" + "".join(cells))
+    cells = []
+    for y in years:
+        cells.append(f"{bh(bars, f'{y}-01-01', f'{y + 1}-01-01')['ret'] * 100:>+7.0f}")
+    print(f"  {'buy & hold':<44}" + "".join(cells))
+
+
 def check_sensitivity(bars, costs):
-    print("\n" + "=" * 96)
-    print("3. PARAMETER SENSITIVITY  (full period; looking for a plateau, not a spike)")
-    print("=" * 96)
-    results = []
-    for p in GRID:
-        r = run_window(bars, p, costs)
-        results.append((p, metrics(r)))
+    print("\n" + "=" * 104)
+    print("3. PARAMETER SENSITIVITY on the development set (plateau or spike?)")
+    print("=" * 104)
+    specs = [
+        ("dualmom", DualMomentum, grid(lookback=[20, 30, 45, 60, 90],
+                                       slow_ma=[200, 250, 300, 400],
+                                       exit_ma=[15, 20, 30, 50],
+                                       target_vol=[0.4])),
+        ("matrend noconfirm", MaTrend, grid(entry_ma=[15, 20, 30, 40],
+                                            exit_ma=[20, 30, 50],
+                                            confirm=[False], target_vol=[0.4])),
+    ]
+    for label, cls, g in specs:
+        rets, sharpes, dds = [], [], []
+        for p in g:
+            r = evaluate(bars, lambda p=p: cls(**{**FIXED, **p}), costs, "1d", None, DEV_END)
+            rets.append(r.total_return)
+            sharpes.append(r.sharpe)
+            dds.append(r.max_drawdown)
+        pos = sum(1 for x in rets if x > 0)
+        print(f"\n  {label}: {len(g)} configs")
+        print(f"    profitable        {pos}/{len(g)} ({pos / len(g) * 100:.0f}%)")
+        print(f"    Sharpe            median {np.median(sharpes):.2f}  "
+              f"min {min(sharpes):.2f}  max {max(sharpes):.2f}")
+        print(f"    return            median {np.median(rets) * 100:.0f}%  "
+              f"min {min(rets) * 100:.0f}%  max {max(rets) * 100:.0f}%")
+        print(f"    worst drawdown    {min(dds) * 100:.0f}%")
 
-    sharpes = [m["sharpe"] for _, m in results]
-    print(f"  {len(results)} configurations")
-    print(f"  Sharpe   median {np.median(sharpes):.2f}   mean {np.mean(sharpes):.2f}   "
-          f"min {min(sharpes):.2f}   max {max(sharpes):.2f}")
-    profitable = sum(1 for _, m in results if m["ret"] > 0)
-    beat_1 = sum(1 for s in sharpes if s > 1.0)
-    print(f"  profitable in {profitable}/{len(results)} configs "
-          f"({profitable/len(results)*100:.0f}%)")
-    print(f"  Sharpe > 1.0 in {beat_1}/{len(results)} configs "
-          f"({beat_1/len(results)*100:.0f}%)")
-    print("\n  worst 3 configurations:")
-    for p, m in sorted(results, key=lambda x: x[1]["sharpe"])[:3]:
-        print(f"    {p[0]}/{p[1]}/{p[2]:<4} ret {m['ret']*100:>+7.1f}%  dd {m['dd']*100:>6.1f}%  "
-              f"shp {m['sharpe']:>5.2f}")
-    print("  chosen configuration:")
-    for p, m in results:
-        if p == FIXED:
-            print(f"    {p[0]}/{p[1]}/{p[2]:<4} ret {m['ret']*100:>+7.1f}%  dd {m['dd']*100:>6.1f}%  "
-                  f"shp {m['sharpe']:>5.2f}  <- shipping this")
-    return results
+
+def check_costs(bars, costs):
+    print("\n" + "=" * 104)
+    print("4. COST SHOCK (full period)")
+    print("=" * 104)
+    print(f"  {'':<44}{'1x':>12}{'2x':>12}{'4x':>12}{'8x':>12}")
+    print("  " + "-" * 92)
+    for name, factory in FINALISTS.items():
+        cells = []
+        for m in (1, 2, 4, 8):
+            r = evaluate(bars, factory, costs.scaled(m), "1d")
+            cells.append(f"{r.total_return * 100:>+11.0f}%")
+        print(f"  {name:<44}" + "".join(cells))
+    print("\n  (a strategy whose edge vanishes at 4x costs never had one)")
 
 
-# ---------------------------------------------------------------------------
-# 4. cost shock
-# ---------------------------------------------------------------------------
-def check_costs(bars):
-    print("\n" + "=" * 96)
-    print("4. COST SHOCK  (does the edge survive worse execution?)")
-    print("=" * 96)
-    print(f"  {'costs':<34}{'return':>10}{'maxDD':>9}{'Sharpe':>8}{'trades':>8}")
-    print("-" * 70)
-    for mult in (1, 2, 4, 8):
-        c = Costs(fee_bps=10.0 * mult, slippage_bps=2.0 * mult,
-                  stop_slippage_bps=8.0 * mult)
-        r = run_window(bars, FIXED, c)
-        m = metrics(r)
-        rt = (c.fee_bps * 2 + c.slippage_bps) / 100
-        print(f"  {f'{mult}x  ({rt:.2f}% round trip)':<34}{m['ret']*100:>9.1f}%"
-              f"{m['dd']*100:>8.1f}%{m['sharpe']:>8.2f}{m['n']:>8}")
+def check_walkforward(bars, costs):
+    print("\n" + "=" * 104)
+    print("5. WALK-FORWARD: does refitting beat fixed parameters?")
+    print("=" * 104)
+    g = grid(lookback=[20, 30, 45, 60, 90], slow_ma=[200, 300, 400],
+             exit_ma=[15, 20, 30, 50], target_vol=[0.4])
+
+    def build(p):
+        return lambda: DualMomentum(**{**FIXED, **p})
+
+    curve, rows = walk_forward_refit(bars, g, build, costs, "1d",
+                                     train_months=36, test_months=6, verbose=True)
+    if len(curve) < 2:
+        print("  not enough windows")
+        return
+    first, last = curve.index[0], curve.index[-1]
+
+    fixed_curves = []
+    ts = pd.DatetimeIndex(bars["timestamp"])
+    cur = first
+    while cur < last:
+        nxt = min(cur + pd.DateOffset(months=6), last)
+        fixed_curves.append(
+            evaluate(bars, FINALISTS["A dualmom 30/300/20 vt0.4"], costs, "1d", cur, nxt).equity)
+        cur = nxt
+    fixed_curve = stitch(fixed_curves)
+
+    a, b = curve_stats(curve), curve_stats(fixed_curve)
+    ref = bh(bars, first, last)
+    print(f"\n  Stitched out-of-sample {first.date()} → {last.date()}")
+    print(f"  {'':<30}{'return':>10}{'CAGR':>8}{'maxDD':>8}{'Sharpe':>8}")
+    print("  " + "-" * 64)
+    print(f"  {'refit each window':<30}{a['ret'] * 100:>9.0f}%{a['cagr'] * 100:>7.1f}%"
+          f"{a['dd'] * 100:>7.0f}%{a['sharpe']:>8.2f}")
+    print(f"  {'fixed 30/300/20':<30}{b['ret'] * 100:>9.0f}%{b['cagr'] * 100:>7.1f}%"
+          f"{b['dd'] * 100:>7.0f}%{b['sharpe']:>8.2f}")
+    print(f"  {'buy & hold':<30}{ref['ret'] * 100:>9.0f}%{ref['cagr'] * 100:>7.1f}%"
+          f"{ref['dd'] * 100:>7.0f}%{ref['sharpe']:>8.2f}")
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--data", default="data/BTCUSDT_5m.csv")
-    ap.add_argument("--check", default="all", choices=["all", "wf", "sens", "costs"])
+    ap.add_argument("--check", default="all",
+                    choices=["all", "headline", "years", "sens", "costs", "wf"])
     args = ap.parse_args()
-
     costs = Costs()
-    bars = resample(load_bars(args.data), "1D")
-    print(f"Daily bars: {len(bars)}  {bars.timestamp.iloc[0].date()} → {bars.timestamp.iloc[-1].date()}")
+    bars = load_bars("1d")
+    print(f"Daily bars {len(bars):,}  {bars.timestamp.iloc[0].date()} → "
+          f"{bars.timestamp.iloc[-1].date()}   costs {costs.round_trip_pct:.2f}% round trip")
 
-    if args.check in ("all", "wf"):
-        check_walk_forward(bars, costs)
+    if args.check in ("all", "headline"):
+        check_headline(bars, costs)
+    if args.check in ("all", "years"):
+        check_years(bars, costs)
     if args.check in ("all", "sens"):
         check_sensitivity(bars, costs)
     if args.check in ("all", "costs"):
-        check_costs(bars)
+        check_costs(bars, costs)
+    if args.check in ("all", "wf"):
+        check_walkforward(bars, costs)
 
 
 if __name__ == "__main__":
