@@ -1,309 +1,155 @@
 # Bitcoin Trading Bot Simulator
 
-A sophisticated Python-based Bitcoin trading bot simulator that allows users to test and refine trading strategies without risking real money. This simulator provides real-time market data analysis, adaptive learning capabilities, and comprehensive performance tracking with robust risk management.
+A Python Bitcoin trading simulator with a **backtest-first** workflow: strategies are measured on years of real market data with realistic costs before they are allowed to run, and the live paper trader shares its strategy code with the backtester so that what gets validated is what actually runs.
 
-**⚠️ Important:** This is a SIMULATION tool for educational and testing purposes. No real money is traded.
+**⚠️ This is a SIMULATION.** No real money is traded, no exchange credentials are used, no orders are placed. Nothing here is financial advice.
 
-## ✨ Features
+## Why this exists
 
-### Core Trading (Position Trading Mode)
-- **True position trading** - enters on momentum, exits ONLY on profit targets or stop losses
-- **Day Trading Mode:** 15-minute decision cycles aligned with 1.5% profit targets
-- **Real-time Bitcoin price monitoring** from 5 major exchanges (Binance, Kraken, Bitfinex, Bitstamp, CoinGecko)
-- **Momentum-based entry validation** - requires positive momentum + trend confirmation
-- **Hold-to-target strategy** - positions held 1-4 hours until targets hit (NO premature exits)
-- **Trailing stops** - activate after profit target hit, protect gains while letting winners run
-- **Advanced position management** - up to 3 concurrent positions with dynamic sizing
+The original version of this bot traded on 1-hour momentum with a fixed 1.5% profit target and a -0.8% stop, and reported its own results using a P&L calculation that was structurally always zero — so it could not tell whether it was winning or losing.
 
-### Risk Management (2026 Updates)
-- 🚨 **Circuit breakers** - halt trading at 15% drawdown, 5 consecutive losses, or 5% daily loss
-- **VaR-based position limits** - automatic position reduction during high volatility
-- **Volatility-adjusted sizing** - scale positions 40-60% during extreme market conditions
-- **Position caps** - hard limit at 60% of portfolio in single position
-- **Emergency liquidation** - automatic exit on max drawdown breach
+When those rules were backtested honestly against 3.6 years of BTC data with fees and slippage, they lost **99.2%** of capital. Fees alone consumed 91% of the starting balance across 4,972 trades.
 
-### Machine Learning
-- **Pattern recognition** - identifies TREND_REVERSAL, RANGE_BOUND, and BREAKOUT patterns
-- **Adaptive thresholds** - learns optimal profit targets and stop losses
-- **Strategy weight optimization** - adjusts momentum/trend/volatility/time components
-- **Market condition learning** - optimizes performance for each market state
+That measurement is what the current design is a response to.
 
-### Audit & Monitoring
-- **Comprehensive audit trail** - logs ALL decisions (executed, rejected, holds, circuit breakers)
-- **Parameter evolution tracking** - monitor how bot adapts over time
-- **Visual portfolio tracking** - clear profit/loss indicators in real-time
-- **Performance metrics** - Sharpe ratio, Sortino ratio, win rate, profit factor, max drawdown
+## Measured results
 
-## Requirements
+3.6 years of BTCUSDT, 2023-01-01 → 2026-07-26. Costs: 0.1% fee per side plus slippage (0.22% round trip). Signals are taken from a bar's close and filled at the **next** bar's open, so no lookahead.
 
-- Python 3.7+
-- Required packages:
-  - requests
-  - pandas
-  - numpy
-  - schedule
-  - logging
+| | return | CAGR | max DD | Sharpe | Calmar | trades | exposure |
+|---|---|---|---|---|---|---|---|
+| **current strategy** | **+157.7%** | +37.1% | **-27.4%** | **1.19** | **1.35** | 29 | 48% |
+| buy & hold | +288.4% | +46.3% | -53.0% | 1.05 | 0.87 | — | 100% |
+| original bot's rules | **-99.2%** | -74.0% | -99.3% | -6.72 | — | 4,972 | 100% |
 
-## Installation
+Split by regime:
 
-1. Clone the repository
-2. Install required packages:
-```bash
-pip install requests pandas numpy schedule
-```
+| period | strategy | buy & hold |
+|---|---|---|
+| bull 2023-01 → 2025-06 | +168.7% | +544.8% |
+| bear 2025-07 → 2026-07 | **-3.1%** | **-38.9%** |
 
-## ⚙️ Configuration
+**Out-of-sample walk-forward** — parameters chosen only on prior data, applied to the next unseen 6 months, stitched together (2024-07 → 2026-06):
 
-### Default Parameters (Optimized for Bitcoin Day Trading)
+| | return | CAGR | max DD | Sharpe |
+|---|---|---|---|---|
+| fixed parameters | **+34.9%** | +16.2% | **-18.0%** | 0.72 |
+| refit each window | +30.6% | +14.3% | -20.1% | 0.66 |
+| buy & hold | -6.8% | — | -53.0% | 0.15 |
 
-**Profit/Loss Targets:**
-- Profit target: 1.5% (realistic for Bitcoin's volatility)
-- Stop loss: -0.8% (accounts for normal market noise)
-- Trailing stop: 0.5% (protects profits)
+Fixed parameters beating per-window refitting is the useful signal here: the edge is structural rather than curve-fit, so the shipped configuration is the conventional 50/200 one rather than a tuned one.
 
-**Position Sizing:**
-- Minimum: 20% of portfolio
-- Maximum: 60% of portfolio (hard cap)
-- Risk-adjusted based on volatility and VaR
+### Read this before getting excited
 
-**Risk Limits:**
-- Max drawdown: 15% (circuit breaker activates)
-- Consecutive losses: 5 (halts trading)
-- Daily loss limit: 5% of initial capital
-- Minimum cash reserve: 20% of initial capital
+- **It does not beat buy & hold on raw return.** Over a window where BTC rose 4x, a long-only spot strategy essentially cannot. The edge is risk-adjusted: better Sharpe and Calmar, roughly half the drawdown, and only 48% time in market.
+- **It cannot profit from a downtrend**, only sit one out. Long or flat, no shorting, no leverage.
+- **29 trades is a small sample.** One asset, one market cycle. Treat the numbers as indicative.
+- **A 28% win rate is normal here.** Three trades produced nearly all the profit (+53%, +53%, +48%) against many small losses. That is what trend following looks like, and it is why a fixed profit target is so damaging — it caps exactly the trades that pay for everything else.
 
-**Decision Frequency:**
-- Price tracking: Every 5 minutes (builds 1-hour rolling window)
-- Trade decisions: Every 15 minutes (96/day)
-- Status updates: Every 5 minutes
-- State saves: Every 15 minutes
+## Strategy
 
-## 🚀 Usage
+`VolTargetTrendStrategy` on daily bars — long/flat trend following.
 
-To start the bot:
+- **Entry** — close > EMA200, EMA50 > EMA200, and close > EMA50
+- **Exit** — close < EMA50, a regime flip, or an 8×ATR disaster stop
+- **Size** — `min(target_vol / realized_vol, 0.95)` of equity, so position size shrinks as volatility rises
+
+Four design choices, each measured rather than assumed:
+
+1. **Two-condition regime gate.** Requiring the moving-average structure to be bullish (not just price above a line) keeps the bot completely flat through sustained bear markets — 0 trades in H1 2026 while BTC fell 34%. Removing the confirmation turns the bear period from -3.1% into -10.7%.
+2. **No profit target.** Trend following pays from a handful of large moves; capping them removes the edge.
+3. **ATR-based stops, not percentage stops.** BTC's hourly volatility is ~0.5%, so the original -0.8% stop sat 1.6 sigma away and was triggered by noise. This stop is wide and fires only on crashes.
+4. **Low turnover.** 29 trades in 3.6 years, and the edge survives **4× the assumed costs** (Sharpe 0.98). The original strategy died of fees.
+
+## Install
 
 ```bash
-python bitcoin_trading_bot.py
+pip install -r requirements.txt
+python fetch_data.py            # downloads history into data/ (~375k bars, ~2 min)
 ```
 
-The bot will:
-1. **Warm-up phase (~2 minutes):** Collect 12 initial prices for momentum calculations
-2. **Initialize:** Start with $10,000 in 100% BTC position (or load saved state)
-3. **Price tracking:** Update price history every 5 minutes (1-hour rolling window)
-4. **Trading decisions:** Evaluate momentum and make trades every 15 minutes
-5. **Status updates:** Display portfolio status every 5 minutes
-6. **State persistence:** Auto-save state and audit logs every 15 minutes
+## Usage
 
-Key features:
-- Momentum-based entry validation (requires positive momentum + uptrend)
-- Circuit breakers halt trading at 15% drawdown or 5 consecutive losses
-- Trailing stops protect profits once targets hit
-- Auto-adjusts thresholds if rejection rate exceeds 90%
-- Self-diagnostic health checks for data pipeline
+Paper trading:
 
-## Key Components
-
-### Market Analysis
-- Real-time price monitoring
-- Volatility calculation
-- Trend detection
-- Momentum analysis
-- Market condition classification
-
-### Position Management
-- Dynamic position sizing
-- Multiple position stacking
-- Partial position exits
-- Trailing stop management
-- Bull market detection
-
-### Risk Management
-- Value at Risk (VaR) calculation
-- Dynamic stop-loss adjustment
-- Position size limits
-- Volatility-based trade sizing
-- Maximum drawdown protection
-
-### Performance Tracking
-- Trade history logging
-- Performance metrics calculation
-- Success rate tracking
-- Market condition correlation
-- Missed opportunity analysis
-
-## 📁 Data Files
-
-The bot maintains comprehensive audit trails:
-
-### Runtime Data (automatically generated)
-- `bot_state.json` - Complete bot state snapshot
-- `trade_history.json` - All executed trades with full details
-- `decision_audit_log.json` - ⭐ ALL decisions (trades, holds, rejections, circuit breakers)
-- `parameter_changes.json` - ⭐ Parameter evolution tracking
-- `learning_data.json` - ML patterns and success rates
-- `market_data.csv` - Continuous market data time series
-- `performance_history.json` - Performance metric snapshots
-- `current_status.txt` - Latest status (human-readable)
-- `trading_bot.log` - Detailed runtime logs
-
-**Note:** All runtime data files are logged with comprehensive details including timestamps, market conditions, momentum data, and decision rationale for post-analysis and learning.
-
-## Safety Features
-
-- API rate limiting
-- Error handling and recovery
-- State persistence
-- Multiple exchange price validation
-- Minimum trade size enforcement
-
-## Customization
-
-The bot can be customized by modifying:
-- Trading thresholds in the constructor
-- Position sizing parameters
-- Market condition definitions
-- Time-based trading restrictions
-- Risk management parameters
-
-## 📊 Expected Performance
-
-Based on comprehensive improvements (2026):
-
-| Metric | Before | After | Target |
-|--------|--------|-------|--------|
-| Max Drawdown | 20-30% | **10-15%** | <15% |
-| Win Rate | 30-40% | **50-60%** | >50% |
-| Avg Win | 0.4% | **1.5-2.5%** | >1.5% |
-| Stop Hit Rate | 60-80% | **20-30%** | <30% |
-| Sharpe Ratio | 0.5 | **1.2-1.5** | >1.0 |
-| Profit Factor | 0.8-1.0 | **1.5-2.0** | >1.5 |
-
-**Risk-Adjusted Returns:** 2-3x improvement expected
-
-## ⚠️ Important Notes
-
-1. **This is a SIMULATION tool** - does not trade with real money
-2. All trades are simulated based on real market data from exchanges
-3. Multiple API sources with rate limiting and error handling
-4. Circuit breakers protect against catastrophic losses
-5. Comprehensive audit trail for learning and analysis
-6. Performance metrics are from simulated trades only
-
-## Monitoring
-
-The bot provides several monitoring capabilities:
-- Real-time status display
-- Performance reporting
-- Detailed logging
-- Trade analysis
-- Strategy performance metrics
-
-## 📊 Expected Performance (Position Trading Mode)
-
-| Metric | Target | Notes |
-|--------|--------|-------|
-| **Win Rate** | 50-60% | Momentum strategy with confirmed entries |
-| **Trade Frequency** | 3-8/day | Quality over quantity |
-| **Avg Hold Time** | 1-4 hours | Until target/stop hit |
-| **Avg Win** | +1.5% to +3.0% | Profit targets + trailing stops |
-| **Avg Loss** | -0.8% | Stop loss protection |
-| **Max Positions** | 3 concurrent | Risk diversification |
-| **Max Drawdown** | <15% | Circuit breaker limit |
-| **Sharpe Ratio** | 1.2-1.5 | Risk-adjusted returns |
-
-**Trading Pattern:**
-```
-10:00 BUY  @ $70,000 → Target: $71,050 (+1.5%), Stop: $69,440 (-0.8%)
-11:30 SELL @ $71,200 → Profit: +$120 (+1.71%) ✅
-
-14:00 BUY  @ $71,500 → Target: $72,573, Stop: $71,079
-15:45 SELL @ $70,930 → Loss: -$54 (-0.80%) ❌
+```bash
+python live_trader.py --once      # evaluate the latest completed daily bar
+python live_trader.py --loop      # run continuously, one decision per day
+python live_trader.py --status    # portfolio state
+python live_trader.py --replay    # verify live logic reproduces the backtest
 ```
 
-## 🎯 Visual Indicators
+Research:
 
-The bot uses visual indicators in logs for quick status recognition:
+```bash
+python compare.py                    # strategies vs buy & hold, by regime
+python compare.py --include-legacy   # include the original bot's rules
+python validate.py                   # walk-forward, sensitivity, cost shock
+python sweep.py --strategy voltarget --timeframe 1D
+python run_backtest.py --strategy legacy
+```
 
-- 📈/📉 = Portfolio profit/loss status
-- ✅/❌ = Individual trade profit/loss
-- 🚨 = Circuit breaker activated (critical)
-- ⚠️ = Risk warning (approaching limits)
-- 🧠 = ML learning system update
-- 📊 = Adaptive thresholds updated
-- 💾 = Data saved to disk
-- 📍 = New position opened (tracks entry/target/stop)
+Tests:
 
-## 🔧 Recent Improvements (2026)
+```bash
+python test_backtest.py       # engine accounting (no lookahead, costs, conservation)
+python test_live_trader.py    # live accounting, persistence, backtest agreement
+```
 
-**Week 1: Critical Loss Prevention**
-- Fixed backwards adjustment logic bug (stops now widen when losing)
-- Implemented realistic profit/stop parameters (1.5% / -0.8%)
-- Capped maximum position sizes (60% hard limit)
-- Added circuit breakers with emergency liquidation
+## How it fits together
 
-**Week 2: Risk Refinement**
-- Implemented trailing stops for profit protection
-- Added VaR-based position limits
-- Volatility-adjusted position sizing
+One strategy implementation, two consumers:
 
-**Week 3: Entry Quality**
-- Momentum-based entry validation (requires confirmation)
-- Increased signal quality thresholds (10x more selective)
-- Entry rejection rate: 40-60% (filters bad entries)
+```
+strategies.py  ──┬──  backtest.py   (research: sweep, compare, validate)
+                 └──  live_trader.py (paper trading)
+```
 
-**Week 4: ML Integration**
-- Connected learning systems to trading loop
-- Parameter evolution tracking
-- Pattern-based position sizing
-- Strategy weight optimization
+`live_trader.py --replay` runs the live decision path over history and asserts it matches the backtester — currently within 0.001% on final equity with identical trade counts. Run it after touching strategy or execution code; it is what stops the two paths silently diverging.
 
-**Week 5: Data Pipeline & Adaptability** (Feb 2026)
-- 🔄 **Price history tracking** - Updates every 5 minutes (1-hour rolling window, 12 prices)
-- ⏳ **Startup warm-up** - Collects 12 prices (~2 min) before first trade (prevents zero-data issues)
-- 🔍 **Enhanced diagnostics** - Detailed momentum/volatility logging with health checks
-- 🔄 **Fallback logic** - Simple trend detection when sophisticated calculations fail
-- 📊 **Auto-adjustment** - Reduces thresholds by 20% if rejection rate > 90%
-- 💡 **Self-diagnostic** - Bot detects and reports data pipeline issues
+### Backtest honesty
 
-**Week 6: Position Trading Strategy** (Feb 15, 2026) 🚀
-- 🎯 **CRITICAL FIX:** Converted from rebalancing to true position trading
-- ❌ **Removed:** All "RISK_REDUCTION" automatic sells that caused premature exits
-- ✅ **Implemented:** Hold-to-target strategy - positions held until profit target (+1.5%) or stop loss (-0.8%)
-- 📊 **Entry-only decisions:** Trading logic now only generates BUY signals for new positions
-- 🎯 **Exit management:** ALL exits handled by position management (targets/stops/trailing stops)
-- 💰 **Position tracking:** Each BUY creates tracked position with defined targets and stops
-- ⏱️ **Hold time:** Positions now held 1-4 hours (not 15-30 minutes)
-- 🔒 **Max positions:** Limited to 3 concurrent positions with 20% cash reserve
+The engine is deliberately pessimistic, because the default failure mode of a backtest is inventing profit:
 
-**Problem Solved:** Bot had 10% "win rate" because 100% of trades showed `pnl: $0` due to immediate rebalancing. Now positions are held to completion, capturing actual profits and losses. Expected: 50-60% real win rate with 3-8 quality trades per day instead of 25-50 worthless rebalancing trades.
+- **No lookahead** — a signal from bar *i*'s close fills at bar *i+1*'s open
+- **Costs always charged** — fee per side plus slippage; stop exits pay extra, since they are market orders into a move already against you
+- **Pessimistic intrabar ordering** — if a bar's range contains both stop and target, the stop is taken
+- **No leverage** — the engine refuses to spend cash it does not have
 
-See `STRATEGY_CHANGE.md` for complete technical analysis.
+`test_backtest.py` asserts each of these.
 
-## 🤝 Contributing
+## Project layout
 
-Key areas for enhancement:
-- Additional technical indicators (RSI, MACD, Bollinger Bands)
-- Multi-asset support (Ethereum, other cryptos)
-- Backtesting framework with historical data
-- Additional exchange integrations
-- Web dashboard for monitoring
+| file | role |
+|---|---|
+| `strategies.py` | strategy implementations, shared by backtest and live |
+| `backtest.py` | event-driven engine, cost model, metrics |
+| `live_trader.py` | paper trading: portfolio, broker, persistence |
+| `fetch_data.py` | historical data download |
+| `compare.py` | head-to-head vs buy & hold by period |
+| `validate.py` | walk-forward, parameter sensitivity, cost shock |
+| `sweep.py` | parameter grids with train/test split |
+| `run_backtest.py` | single-strategy runs |
+| `test_backtest.py`, `test_live_trader.py` | test suites |
+| `bitcoin_trading_bot.py` | **superseded** original bot, kept for reference |
 
-## ⚖️ Disclaimer
+Runtime files (`data/`, `live_state.json`, `live_trades.json`, `live_decisions.json`, logs) are gitignored.
 
-**Educational and Testing Purposes Only**
+## Contributing
 
-This is a simulation tool intended for learning and strategy testing. It:
-- Does NOT connect to real trading accounts
-- Does NOT handle real money
-- Does NOT execute actual trades
-- Should NOT be used for live trading without substantial modification, thorough testing, and professional financial advice
+Genuinely useful directions:
 
-The authors are not responsible for any financial losses. Always consult with a qualified financial advisor before trading with real money.
+- **Multi-asset.** Trend following works better across several instruments than on one; it is also the cleanest test of whether this edge is real or fitted to BTC.
+- **Short side.** The 2026 decline is unexploitable as-is. Adding shorts needs perpetual futures, which means modelling funding rates and liquidation honestly.
+- **More history.** 2017-2022 would add two more cycles and materially strengthen the walk-forward evidence.
+- **Regime-aware sizing** beyond simple volatility targeting.
 
-## 📄 License
+If you change the strategy, show `validate.py` output. An improvement that appears in-sample but not out-of-sample is overfitting, and the walk-forward block stops being out-of-sample the moment parameters are chosen against it.
 
-MIT License - Free to use and modify.
+## Disclaimer
 
----
+Educational and testing purposes only. This does not connect to real accounts, handle real money, or execute real trades. Simulated results are not predictive of live results — real trading adds slippage on size, exchange downtime, API failures, and your own behaviour under drawdown. Do not trade real money on this without substantial additional work and professional advice.
 
-**Built with Python • Powered by Machine Learning • Protected by Circuit Breakers** 🚀
+## License
+
+MIT.

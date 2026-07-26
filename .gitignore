@@ -28,6 +28,10 @@ trading_bot.log
 
 # Data files (runtime generated)
 data/
+live_state.json
+live_state.json.tmp
+live_trades.json
+live_decisions.json
 bot_state.json
 trade_history.json
 learning_data.json
